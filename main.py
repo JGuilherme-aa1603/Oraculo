@@ -1,6 +1,8 @@
-"""Oráculo — assistente de voz local (Fase 1: chat de terminal).
+"""Oráculo — assistente de voz local.
 
-Entry point: loop de conversa no terminal com memória e Ollama via LangChain.
+Fase 1: chat de terminal com memória e Ollama.
+Fase 2: entrada/saída de voz opcional (Whisper STT + Piper TTS), comandos e
+        persistência de sessões. O modo texto continua sendo o padrão.
 """
 
 import sys
@@ -8,15 +10,56 @@ import sys
 from rich.console import Console
 
 import config
+from core import commands, history as history_mod
 from core.chain import OraculoChain
 from core.splash import show_splash
 
 console = Console()
 
 
-def main() -> None:
-    show_splash(config.OLLAMA_MODEL, memory_active=True)
+def _listen(ctx: dict) -> str | None:
+    """Captura uma fala no modo voz (gravação fixa). Enter grava; texto digitado
+    é usado diretamente como escape. Retorna o texto ou None se nada foi captado."""
+    from core import audio, stt
 
+    typed = console.input(
+        f"[dim][voz] Enter para gravar {config.RECORD_DURATION:.0f}s "
+        f"(ou digite e Enter):[/] "
+    ).strip()
+    if typed:
+        return typed
+
+    try:
+        console.print("[dim](gravando...)[/]")
+        path = audio.record()
+        console.print("[dim](transcrevendo...)[/]")
+        text = stt.transcribe(path)
+    except RuntimeError as exc:
+        console.print(f"[yellow]{exc}[/]")
+        console.print("[yellow]Voltando ao modo texto.[/]")
+        ctx["voice_mode"] = False
+        return None
+
+    if not text:
+        console.print("[dim](não entendi nada — tente de novo)[/]")
+        return None
+
+    console.print(f"[dim](você disse: {text})[/]")
+    return text
+
+
+def _speak(text: str) -> None:
+    """Sintetiza e reproduz a resposta. Falhas não derrubam a conversa."""
+    from core import audio, tts
+
+    try:
+        wav = tts.speak(text)
+        audio.play(wav)
+    except (RuntimeError, Exception) as exc:  # noqa: BLE001
+        console.print(f"[yellow](voz indisponível: {exc})[/]")
+
+
+def main() -> None:
     try:
         chain = OraculoChain()
     except Exception as exc:  # noqa: BLE001
@@ -26,9 +69,24 @@ def main() -> None:
         )
         sys.exit(1)
 
-    while True:
+    show_splash(chain.model_name, recent_sessions=history_mod.load_recent())
+
+    history = history_mod.SessionHistory()
+    ctx = {
+        "console": console,
+        "chain": chain,
+        "running": True,
+        "voice_mode": config.VOICE_MODE_DEFAULT,
+    }
+
+    while ctx["running"]:
         try:
-            user_input = console.input("[bold cyan]Você:[/] ").strip()
+            if ctx["voice_mode"]:
+                user_input = _listen(ctx)
+                if not user_input:
+                    continue
+            else:
+                user_input = console.input("[bold cyan]Você:[/] ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[cyan]Encerrando...[/]")
             break
@@ -36,15 +94,21 @@ def main() -> None:
         if not user_input:
             continue
 
-        if user_input.lower() in config.EXIT_COMMANDS:
-            console.print("[cyan]Encerrando...[/]")
-            break
+        if commands.handle(user_input, ctx):
+            continue
 
+        history.record("user", user_input)
         console.print(f"[bold bright_cyan]{config.ASSISTANT_NAME}:[/] ", end="")
         try:
+            chunks: list[str] = []
             for token in chain.stream(user_input):
+                chunks.append(token)
                 console.print(token, end="", style="bright_white")
             console.print()
+            response = "".join(chunks)
+            history.record("assistant", response)
+            if ctx["voice_mode"] and response:
+                _speak(response)
         except KeyboardInterrupt:
             console.print("\n[yellow](resposta interrompida)[/]")
         except Exception as exc:  # noqa: BLE001

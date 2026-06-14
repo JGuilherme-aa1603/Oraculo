@@ -12,9 +12,9 @@ from core.memory import ConversationMemory
 class OraculoChain:
     """Orquestra prompt, memória e modelo para uma sessão de conversa."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = config.OLLAMA_MODEL):
+        self.model_name = model_name
         self.memory = ConversationMemory()
-        self.llm = build_llm()
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", config.SYSTEM_PROMPT),
@@ -22,6 +22,13 @@ class OraculoChain:
                 ("human", "{input}"),
             ]
         )
+        self.llm = build_llm(self.model_name)
+        self.pipeline = self.prompt | self.llm
+
+    def set_model(self, model_name: str) -> None:
+        """Troca o modelo ativo em tempo de execução, preservando a memória."""
+        self.model_name = model_name
+        self.llm = build_llm(model_name)
         self.pipeline = self.prompt | self.llm
 
     def stream(self, user_input: str) -> Iterator[str]:

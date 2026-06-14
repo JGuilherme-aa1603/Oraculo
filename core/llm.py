@@ -5,10 +5,10 @@ from langchain_ollama import ChatOllama
 import config
 
 
-def build_llm() -> ChatOllama:
+def build_llm(model: str = config.OLLAMA_MODEL) -> ChatOllama:
     """Instancia o modelo Ollama com os parâmetros do config."""
     return ChatOllama(
-        model=config.OLLAMA_MODEL,
+        model=model,
         base_url=config.OLLAMA_BASE_URL,
         temperature=config.TEMPERATURE,
         num_ctx=config.NUM_CTX,

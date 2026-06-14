@@ -1,5 +1,13 @@
 """Configurações centralizadas do Oráculo."""
 
+import os
+from pathlib import Path
+
+# --- Identidade / versão ---
+ASSISTANT_NAME = "Oráculo"
+APP_VERSION = "1.0.0"
+USER_NAME = None  # None → detecta pelo usuário do sistema (getpass.getuser)
+
 # --- Modelo Ollama ---
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5:7b"
@@ -7,13 +15,34 @@ OLLAMA_MODEL = "qwen2.5:7b"
 # --- Parâmetros do modelo ---
 TEMPERATURE = 0.7
 NUM_CTX = 8192       # Mantido baixo para economizar VRAM (padrão do Ollama pode ser 131072)
-MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta
+MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
+                     # Ajustável: respostas mais longas podem exigir um valor maior;
+                     # para conversa normal, 2000 é folgado.
 
 # --- Memória ---
-MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (user + assistant) no contexto
+MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 
-# --- Identidade ---
-ASSISTANT_NAME = "Oráculo"
+# --- Voz / STT (Whisper) ---
+WHISPER_MODEL = "base"          # base | small
+WHISPER_DEVICE = "cuda"         # cuda (RTX 4060) | cpu
+WHISPER_COMPUTE_TYPE = "float16"
+RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
+RECORD_SAMPLERATE = 16000
+
+# --- Voz / TTS (Piper) ---
+PIPER_BIN = "piper"             # caminho do binário, se não estiver no PATH
+PIPER_VOICE = "pt_BR-faber-medium.onnx"
+
+# --- Modo padrão ---
+VOICE_MODE_DEFAULT = False      # começa em texto, /voz alterna
+
+# --- Persistência de sessões ---
+DATA_DIR = Path(os.path.expanduser("~/.oraculo"))
+SESSIONS_DIR = DATA_DIR / "sessions"
+RECENT_SESSIONS_ON_SPLASH = 3
+
+# --- Rótulo de hardware exibido na splash (informativo) ---
+DEVICE_LABEL = "CUDA RTX 4060"
 
 # --- System Prompt ---
 SYSTEM_PROMPT = """Você é o Oráculo, um assistente pessoal local rodando 100% offline.

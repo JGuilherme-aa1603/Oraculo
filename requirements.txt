@@ -6,10 +6,12 @@ langchain-community==0.4.2
 rich==15.0.0
 
 # --- Voz (Fase 2) ---
-# STT (Whisper via CTranslate2) e áudio. O Piper (TTS) é um binário externo,
-# instalado pelo sistema/AUR — veja o README.
+# STT: faster-whisper (Whisper via CTranslate2, roda na CPU).
+# TTS: kokoro-onnx (voz feminina pt-BR natural; traz espeak-ng via espeakng-loader,
+#      sem precisar de sudo). Piper (binário AUR) fica como alternativa masculina.
 # sounddevice/soundfile exigem PortAudio e libsndfile no sistema:
 #   sudo pacman -S portaudio libsndfile
 faster-whisper
+kokoro-onnx
 sounddevice
 soundfile

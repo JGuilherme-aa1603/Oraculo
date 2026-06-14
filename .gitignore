@@ -8,9 +8,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# Modelos de voz do Piper (grandes — baixados localmente)
+# Modelos de voz (grandes — baixados localmente): Piper e Kokoro
 *.onnx
 *.onnx.json
+*.bin
 
 # Editores / SO
 .vscode/

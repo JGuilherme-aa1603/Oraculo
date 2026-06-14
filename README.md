@@ -25,21 +25,24 @@ python -m venv .venv
 
 ### Dependências de voz (Fase 2 — opcional)
 
-A voz exige pacotes de sistema e um binário externo (Piper), além das libs Python:
+- **STT:** Whisper (`faster-whisper`) na CPU.
+- **TTS padrão:** Kokoro (`kokoro-onnx`), voz feminina pt-BR natural (`pf_dora`).
+  Não precisa de sudo — o espeak-ng vem via `espeakng-loader`.
 
 ```bash
 # Bibliotecas de sistema (PortAudio para mic, libsndfile para WAV)
 sudo pacman -S portaudio libsndfile
 
-# Piper (TTS) via AUR — ou baixe o binário standalone
-yay -S piper-tts
+# Libs Python de voz (já incluídas no requirements.txt)
+.venv/bin/python -m pip install faster-whisper kokoro-onnx sounddevice soundfile
 
-# Voz pt-BR do Piper (rhasspy/piper-voices no HuggingFace), ex.: pt_BR-faber-medium
-#   .onnx + .onnx.json no diretório de trabalho ou ajuste PIPER_VOICE no config.py
-
-# Libs Python (já incluídas no requirements.txt)
-.venv/bin/python -m pip install faster-whisper sounddevice soundfile
+# Modelos do Kokoro (releases de thewh1teagle/kokoro-onnx) na raiz do projeto:
+#   kokoro-v1.0.onnx   e   voices-v1.0.bin
 ```
+
+Para usar a voz **masculina do Piper** em vez do Kokoro, defina `TTS_ENGINE = "piper"`
+no `config.py`, instale `yay -S piper-tts` e baixe uma voz pt-BR (ex.: `pt_BR-faber-medium`
+`.onnx` + `.onnx.json`) de rhasspy/piper-voices.
 
 Sem essas dependências, o modo texto funciona normalmente; ao tentar `/voz`, o
 Oráculo avisa o que falta e volta ao texto.

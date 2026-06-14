@@ -23,7 +23,7 @@ MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
 MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 
 # --- Voz / STT (Whisper) ---
-WHISPER_MODEL = "base"          # base | small (small é mais preciso, ~3x mais lento)
+WHISPER_MODEL = "small"         # base | small (small é mais preciso, ~3x mais lento)
 WHISPER_DEVICE = "cpu"          # cpu | cuda
 WHISPER_COMPUTE_TYPE = "int8"   # cpu→int8 | cuda→float16
 # Nota: o ctranslate2 (backend do faster-whisper) exige CUDA 12 (libcublas.so.12)
@@ -33,11 +33,22 @@ WHISPER_COMPUTE_TYPE = "int8"   # cpu→int8 | cuda→float16
 RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
 RECORD_SAMPLERATE = 16000
 
-# --- Voz / TTS (Piper) ---
-PIPER_BIN = "piper-tts"         # binário do pacote AUR piper-tts-bin (em /usr/bin)
-# Caminho ABSOLUTO do modelo de voz, ancorado na raiz do projeto (não no cwd),
-# para que o Piper ache o .onnx independente de onde o app foi iniciado.
+# --- Voz / TTS ---
+# Raiz do projeto, para ancorar caminhos de modelos no projeto (não no cwd).
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+TTS_ENGINE = "kokoro"           # kokoro (feminina, natural) | piper (masculina, leve)
+
+# Kokoro (kokoro-onnx) — voz feminina pt-BR natural, roda na CPU.
+KOKORO_MODEL = str(PROJECT_ROOT / "kokoro-v1.0.onnx")
+KOKORO_VOICES = str(PROJECT_ROOT / "voices-v1.0.bin")
+KOKORO_VOICE = "pf_dora"        # pf_dora (feminina) | pm_alex, pm_santa (masculinas)
+KOKORO_LANG = "pt-br"
+KOKORO_SPEED = 1.0
+
+# Piper (alternativa) — binário do pacote AUR piper-tts-bin. Caminho ABSOLUTO do
+# modelo, ancorado na raiz do projeto, para funcionar de qualquer diretório.
+PIPER_BIN = "piper-tts"
 PIPER_VOICE = str(PROJECT_ROOT / "pt_BR-faber-medium.onnx")
 
 # --- Modo padrão ---

@@ -30,10 +30,17 @@ class ConversationMemory:
         return self._history.messages
 
     def _trim(self) -> None:
-        """Mantém apenas as últimas `max_messages` mensagens."""
+        """Mantém no máximo `max_messages`, removendo mensagens antigas em PARES.
+
+        Como o histórico alterna user/assistant, remover sempre um número par pela
+        frente preserva pares completos e evita deixar uma resposta órfã (uma
+        mensagem da IA sem a pergunta correspondente) no início da janela.
+        """
         msgs = self._history.messages
-        if len(msgs) > self.max_messages:
-            self._history.messages = msgs[-self.max_messages:]
+        excess = len(msgs) - self.max_messages
+        if excess > 0:
+            remove = excess + (excess % 2)  # arredonda para cima até um número par
+            self._history.messages = msgs[remove:]
 
     def clear(self) -> None:
         self._history.clear()

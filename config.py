@@ -23,15 +23,22 @@ MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
 MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 
 # --- Voz / STT (Whisper) ---
-WHISPER_MODEL = "base"          # base | small
-WHISPER_DEVICE = "cuda"         # cuda (RTX 4060) | cpu
-WHISPER_COMPUTE_TYPE = "float16"
+WHISPER_MODEL = "base"          # base | small (small é mais preciso, ~3x mais lento)
+WHISPER_DEVICE = "cpu"          # cpu | cuda
+WHISPER_COMPUTE_TYPE = "int8"   # cpu→int8 | cuda→float16
+# Nota: o ctranslate2 (backend do faster-whisper) exige CUDA 12 (libcublas.so.12)
+# + cuDNN 9. Este sistema tem CUDA 13 e o Ollama usa o CUDA dele próprio, então o
+# Whisper roda na CPU (rápido para clipes curtos) e a GPU fica livre para o LLM.
+# Para usar GPU seria preciso instalar os wheels nvidia-cublas-cu12 e nvidia-cudnn-cu12.
 RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
 RECORD_SAMPLERATE = 16000
 
 # --- Voz / TTS (Piper) ---
-PIPER_BIN = "piper"             # caminho do binário, se não estiver no PATH
-PIPER_VOICE = "pt_BR-faber-medium.onnx"
+PIPER_BIN = "piper-tts"         # binário do pacote AUR piper-tts-bin (em /usr/bin)
+# Caminho ABSOLUTO do modelo de voz, ancorado na raiz do projeto (não no cwd),
+# para que o Piper ache o .onnx independente de onde o app foi iniciado.
+PROJECT_ROOT = Path(__file__).resolve().parent
+PIPER_VOICE = str(PROJECT_ROOT / "pt_BR-faber-medium.onnx")
 
 # --- Modo padrão ---
 VOICE_MODE_DEFAULT = False      # começa em texto, /voz alterna

@@ -61,8 +61,9 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/limpar` — apaga a memória da conversa atual
 - `/sair`, `/exit`, `/quit` — encerra o Oráculo
 
-No modo voz (gravação fixa), pressione Enter para gravar `RECORD_DURATION` segundos,
-ou digite um texto e Enter como atalho.
+No modo voz (push-to-talk), pressione Enter para começar a gravar e Enter de novo
+para parar; ou digite um texto e Enter como atalho. A transcrição usa o Whisper na
+CPU (deixa a GPU livre para o LLM); a fala é sintetizada pelo Piper.
 
 ## Estrutura
 

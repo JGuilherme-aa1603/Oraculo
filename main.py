@@ -18,20 +18,20 @@ console = Console()
 
 
 def _listen(ctx: dict) -> str | None:
-    """Captura uma fala no modo voz (gravação fixa). Enter grava; texto digitado
-    é usado diretamente como escape. Retorna o texto ou None se nada foi captado."""
+    """Captura uma fala no modo voz (push-to-talk). Primeiro Enter inicia a
+    gravação, segundo Enter encerra; texto digitado é usado diretamente como
+    escape. Retorna o texto ou None se nada foi captado."""
     from core import audio, stt
 
     typed = console.input(
-        f"[dim][voz] Enter para gravar {config.RECORD_DURATION:.0f}s "
-        f"(ou digite e Enter):[/] "
+        "[dim][voz] Enter para começar a gravar (ou digite e Enter):[/] "
     ).strip()
     if typed:
         return typed
 
     try:
-        console.print("[dim](gravando...)[/]")
-        path = audio.record()
+        console.print("[dim](gravando... Enter para parar)[/]")
+        path = audio.record_ptt()
         console.print("[dim](transcrevendo...)[/]")
         text = stt.transcribe(path)
     except RuntimeError as exc:

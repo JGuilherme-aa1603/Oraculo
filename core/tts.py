@@ -3,6 +3,7 @@
 Piper é um binário externo. O texto é enviado via stdin e o WAV é escrito em disco.
 """
 
+import os
 import shutil
 import subprocess
 
@@ -22,6 +23,13 @@ def speak(text: str, output_path: str = "/tmp/oraculo_tts.wav") -> str:
             "  yay -S piper-tts   (ou baixe o binário standalone)\n"
             "E baixe uma voz pt-BR (ex.: pt_BR-faber-medium) do repositório\n"
             "rhasspy/piper-voices no HuggingFace."
+        )
+
+    if not os.path.exists(config.PIPER_VOICE):
+        raise RuntimeError(
+            f"Modelo de voz não encontrado: {config.PIPER_VOICE}\n"
+            "Baixe o .onnx e o .onnx.json (ex.: pt_BR-faber-medium) e coloque na\n"
+            "raiz do projeto, ou ajuste PIPER_VOICE no config.py."
         )
 
     subprocess.run(

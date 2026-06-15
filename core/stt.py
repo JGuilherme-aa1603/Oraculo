@@ -49,7 +49,10 @@ def transcribe(audio_path: str) -> str:
     segments, _ = get_model().transcribe(
         audio_path,
         language="pt",
+        beam_size=config.WHISPER_BEAM_SIZE,
         vad_filter=True,
         condition_on_previous_text=False,
+        initial_prompt=config.WHISPER_INITIAL_PROMPT,
+        temperature=0.0,
     )
     return " ".join(seg.text for seg in segments).strip()

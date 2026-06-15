@@ -66,7 +66,9 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 
 No modo voz (push-to-talk), pressione Enter para começar a gravar e Enter de novo
 para parar; ou digite um texto e Enter como atalho. A transcrição usa o Whisper na
-CPU (deixa a GPU livre para o LLM); a fala é sintetizada pelo Piper.
+CPU (deixa a GPU livre para o LLM); a fala é sintetizada pelo Kokoro (voz feminina).
+As respostas são renderizadas como Markdown no terminal; antes da síntese de voz a
+marcação é removida para a fala não soletrar símbolos.
 
 ## Estrutura
 
@@ -81,7 +83,8 @@ oraculo/
 │   ├── commands.py  # Roteamento de comandos (/ajuda, /voz, /modelo, /limpar, /sair)
 │   ├── history.py   # Persistência de sessões em JSON (~/.oraculo/sessions)
 │   ├── stt.py       # Whisper (faster-whisper) — áudio → texto
-│   ├── tts.py       # Piper — texto → áudio
+│   ├── tts.py       # Kokoro/Piper — texto → áudio
+│   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
 │   ├── audio.py     # Captura de microfone + reprodução
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── requirements.txt

@@ -8,9 +8,11 @@ Fase 2: entrada/saída de voz opcional (Whisper STT + Piper TTS), comandos e
 import sys
 
 from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
 
 import config
-from core import commands, history as history_mod
+from core import commands, history as history_mod, speaker as speaker_mod
 from core.chain import OraculoChain
 from core.splash import show_splash
 
@@ -46,17 +48,6 @@ def _listen(ctx: dict) -> str | None:
 
     console.print(f"[dim](você disse: {text})[/]")
     return text
-
-
-def _speak(text: str) -> None:
-    """Sintetiza e reproduz a resposta. Falhas não derrubam a conversa."""
-    from core import audio, tts
-
-    try:
-        wav = tts.speak(text)
-        audio.play(wav)
-    except (RuntimeError, Exception) as exc:  # noqa: BLE001
-        console.print(f"[yellow](voz indisponível: {exc})[/]")
 
 
 def main() -> None:
@@ -98,21 +89,32 @@ def main() -> None:
             continue
 
         history.record("user", user_input)
-        console.print(f"[bold bright_cyan]{config.ASSISTANT_NAME}:[/] ", end="")
+        console.print(f"[bold bright_cyan]{config.ASSISTANT_NAME}:[/]")
+        # No modo voz, a fala é sintetizada frase a frase JÁ DURANTE a geração,
+        # sobreposta à escrita — não espera a resposta inteira terminar.
+        speaker = speaker_mod.StreamSpeaker() if ctx["voice_mode"] else None
         try:
             chunks: list[str] = []
-            for token in chain.stream(user_input):
-                chunks.append(token)
-                console.print(token, end="", style="bright_white")
-            console.print()
+            # Live + Markdown: renderiza a resposta formatada enquanto chega,
+            # em vez de despejar os símbolos crus (*, #, ```) no terminal.
+            with Live(console=console, refresh_per_second=12,
+                      vertical_overflow="visible") as live:
+                for token in chain.stream(user_input):
+                    chunks.append(token)
+                    if speaker:
+                        speaker.feed(token)
+                    live.update(Markdown("".join(chunks)))
             response = "".join(chunks)
             history.record("assistant", response)
-            if ctx["voice_mode"] and response:
-                _speak(response)
         except KeyboardInterrupt:
             console.print("\n[yellow](resposta interrompida)[/]")
         except Exception as exc:  # noqa: BLE001
             console.print(f"\n[bold red]Erro ao responder:[/] {exc}")
+        finally:
+            if speaker:
+                err = speaker.close()
+                if err:
+                    console.print(f"[yellow](voz indisponível: {err})[/]")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 import config
+from core import text as textproc
 from core.llm import build_llm
 from core.memory import ConversationMemory
 
@@ -37,7 +38,8 @@ class OraculoChain:
         for chunk in self.pipeline.stream(
             {"input": user_input, "history": self.memory.messages}
         ):
-            text = chunk.content
+            # Remove caracteres CJK que o modelo às vezes vaza no meio do texto.
+            text = textproc.strip_cjk(chunk.content) if chunk.content else ""
             if text:
                 chunks.append(text)
                 yield text

@@ -23,9 +23,16 @@ MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
 MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 
 # --- Voz / STT (Whisper) ---
-WHISPER_MODEL = "small"         # base | small (small é mais preciso, ~3x mais lento)
+WHISPER_MODEL = "medium"        # base | small | medium (maior = mais preciso e mais lento)
 WHISPER_DEVICE = "cpu"          # cpu | cuda
 WHISPER_COMPUTE_TYPE = "int8"   # cpu→int8 | cuda→float16
+WHISPER_BEAM_SIZE = 5           # busca em feixe: mais alto = mais preciso, um pouco mais lento
+# Contexto inicial dado ao Whisper para enviesar a transcrição ao domínio da
+# conversa (reduz erros como "software"→"sótua"). Não é texto a transcrever.
+WHISPER_INITIAL_PROMPT = (
+    "Conversa em português brasileiro sobre tecnologia, programação, "
+    "desenvolvimento de software e o assistente Oráculo."
+)
 # Nota: o ctranslate2 (backend do faster-whisper) exige CUDA 12 (libcublas.so.12)
 # + cuDNN 9. Este sistema tem CUDA 13 e o Ollama usa o CUDA dele próprio, então o
 # Whisper roda na CPU (rápido para clipes curtos) e a GPU fica livre para o LLM.
@@ -78,6 +85,9 @@ O QUE VOCÊ NÃO CONSEGUE FAZER (seja honesto sobre isso):
 - Você NÃO acessa a internet.
 
 REGRAS:
+- Escreva SEMPRE e somente em português brasileiro, usando apenas o alfabeto
+  latino. NUNCA inclua caracteres chineses, japoneses, coreanos ou de qualquer
+  outro sistema de escrita.
 - Responda de forma concisa, sem prolixidade desnecessária.
 - Se não souber algo, diga claramente.
 - NUNCA finja que executou uma ação (agendar, salvar, enviar, lembrar depois).

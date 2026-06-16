@@ -6,7 +6,8 @@ langchain-community==0.4.2
 rich==15.0.0
 
 # --- Voz (Fase 2) ---
-# STT: faster-whisper (Whisper via CTranslate2, roda na CPU).
+# STT: faster-whisper (Whisper via CTranslate2). Padrão: large-v3 na GPU (ver
+#      bloco "STT na GPU" abaixo); cai automaticamente para CPU se faltar GPU.
 # TTS: kokoro-onnx (voz feminina pt-BR natural; traz espeak-ng via espeakng-loader,
 #      sem precisar de sudo). Piper (binário AUR) fica como alternativa masculina.
 # sounddevice/soundfile exigem PortAudio e libsndfile no sistema:
@@ -18,3 +19,17 @@ soundfile
 # numpy: usado diretamente no push-to-talk (np.concatenate dos frames do mic).
 # Vem como dependência transitiva do sounddevice, mas é declarado aqui por ser importado explicitamente em core/audio.py.
 numpy
+
+# --- STT alternativo: Parakeet V3 (onnx-asr, CPU rápida) ---
+# Motor opcional selecionável via config.STT_ENGINE = "parakeet". Coexiste com o
+# faster-whisper. onnxruntime = CPU; o modelo ONNX é baixado do HF na 1ª execução.
+# Limite de ~20-30s por clipe (sem VAD); tratável com VAD na Fase 3.
+onnx-asr
+onnxruntime
+
+# --- STT na GPU (Whisper large-v3 na RTX 4060) ---
+# Libs CUDA 12 em userspace para o ctranslate2 rodar na GPU mesmo com o sistema
+# em CUDA 13. stt._enable_cuda_libs() pré-carrega esses .so. Só fazem sentido com
+# GPU NVIDIA; sem elas, o STT cai para CPU automaticamente.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

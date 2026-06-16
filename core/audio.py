@@ -61,8 +61,23 @@ def record_ptt(samplerate: int = config.RECORD_SAMPLERATE,
         raise RuntimeError(f"Falha ao acessar o microfone: {exc}") from exc
 
     audio = np.concatenate(frames, axis=0) if frames else np.zeros((1, 1), dtype="float32")
+    audio = _normalize(audio)
     sf.write(path, audio, samplerate)
     return path
+
+
+def _normalize(audio, target_peak: float = 0.95):
+    """Normaliza o pico do áudio para um nível alto e constante.
+
+    Microfone com ganho baixo grava em volume fraco, e ASR reconhece pior áudio
+    fraco. Reescala para o pico chegar a `target_peak`, sem alterar nada se a
+    gravação for praticamente silêncio (evita amplificar só ruído)."""
+    import numpy as np
+
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak < 1e-3:           # silêncio/ruído de fundo — não amplifica
+        return audio
+    return audio * (target_peak / peak)
 
 
 def play(path: str) -> None:

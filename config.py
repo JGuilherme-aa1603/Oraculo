@@ -22,10 +22,16 @@ MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
 # --- Memória ---
 MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 
-# --- Voz / STT (Whisper) ---
-WHISPER_MODEL = "medium"        # base | small | medium (maior = mais preciso e mais lento)
-WHISPER_DEVICE = "cpu"          # cpu | cuda
-WHISPER_COMPUTE_TYPE = "int8"   # cpu→int8 | cuda→float16
+# --- Voz / STT ---
+STT_ENGINE = "whisper"          # whisper | parakeet
+# whisper:  faster-whisper, VAD embutido, fallback CUDA→CPU. Bom p/ clipes longos.
+# parakeet: NVIDIA Parakeet TDT 0.6b v3 (onnx-asr). Muito rápido na CPU e pontua
+#           sozinho, mas tem limite de ~20-30s por clipe (sem VAD; ver Fase 3).
+
+# Whisper (faster-whisper) — backend padrão.
+WHISPER_MODEL = "large-v3"          # base | small | medium | large-v3 (maior = mais preciso)
+WHISPER_DEVICE = "cuda"             # cpu | cuda (cuda exige os wheels nvidia-*-cu12; ver nota)
+WHISPER_COMPUTE_TYPE = "int8_float16"  # cuda→float16/int8_float16 | cpu→int8
 WHISPER_BEAM_SIZE = 5           # busca em feixe: mais alto = mais preciso, um pouco mais lento
 # Contexto inicial dado ao Whisper para enviesar a transcrição ao domínio da
 # conversa (reduz erros como "software"→"sótua"). Não é texto a transcrever.
@@ -33,10 +39,21 @@ WHISPER_INITIAL_PROMPT = (
     "Conversa em português brasileiro sobre tecnologia, programação, "
     "desenvolvimento de software e o assistente Oráculo."
 )
-# Nota: o ctranslate2 (backend do faster-whisper) exige CUDA 12 (libcublas.so.12)
-# + cuDNN 9. Este sistema tem CUDA 13 e o Ollama usa o CUDA dele próprio, então o
-# Whisper roda na CPU (rápido para clipes curtos) e a GPU fica livre para o LLM.
-# Para usar GPU seria preciso instalar os wheels nvidia-cublas-cu12 e nvidia-cudnn-cu12.
+# GPU: o ctranslate2 exige CUDA 12 (libcublas.so.12 + cuDNN 9), mas o sistema tem
+# CUDA 13. Contornado instalando as libs userspace no venv:
+#   .venv/bin/python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# O stt._enable_cuda_libs() pré-carrega esses .so antes de criar o modelo. Com
+# 'int8_float16' o large-v3 ocupa ~2GB de VRAM, deixando espaço para o Ollama nos
+# 8GB da RTX 4060. Se a GPU/libs faltarem, há fallback automático para CPU (int8).
+
+# Parakeet (onnx-asr) — motor alternativo, rápido na CPU. Multilíngue; não tem
+# initial_prompt nem VAD. Modelo ONNX baixado do Hugging Face na 1ª execução e
+# cacheado em ~/.cache/huggingface.
+PARAKEET_MODEL = "nemo-parakeet-tdt-0.6b-v3"
+# Fixa o idioma em vez de deixar a detecção automática (que erra/oscila e piora
+# o reconhecimento de palavras). None volta ao auto-detect.
+PARAKEET_LANGUAGE = "pt"
+
 RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
 RECORD_SAMPLERATE = 16000
 

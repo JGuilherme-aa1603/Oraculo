@@ -1,4 +1,4 @@
-"""Roteamento de comandos do terminal (/ajuda, /voz, /modelo, /limpar, /sair).
+"""Roteamento de comandos do terminal (/ajuda, /voz, /stt, /modelo, /limpar, /sair).
 
 O loop principal passa um dicionário de contexto mutável (`ctx`) com:
   - console: rich.Console
@@ -11,9 +11,12 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 
 import config
 
+STT_ENGINES = ("whisper", "parakeet")
+
 AJUDA_TEXT = """[bold cyan]Comandos disponíveis[/]
   [bright_cyan]/ajuda[/]   mostra esta ajuda
   [bright_cyan]/voz[/]     alterna entre modo voz e modo texto
+  [bright_cyan]/stt[/]     lista motores de transcrição ou troca com [dim]/stt <motor>[/]
   [bright_cyan]/modelo[/]  lista modelos do Ollama ou troca com [dim]/modelo <nome>[/]
   [bright_cyan]/limpar[/]  apaga a memória da conversa atual
   [bright_cyan]/sair[/]    encerra o Oráculo"""
@@ -51,6 +54,34 @@ def _handle_modelo(arg: str, ctx: dict) -> None:
     console.print(f"[cyan]Modelo trocado para[/] [bright_white]{arg}[/].")
 
 
+def _handle_stt(arg: str, ctx: dict) -> None:
+    console = ctx["console"]
+    arg = arg.lower()
+
+    if not arg:
+        console.print("[bold cyan]Motores de transcrição (STT):[/]")
+        for engine in STT_ENGINES:
+            mark = "  [bright_white](atual)[/]" if engine == config.STT_ENGINE else ""
+            console.print(f"  • [bright_white]{engine}[/]{mark}")
+        console.print("[dim]Use /stt <motor> para trocar.[/]")
+        return
+
+    if arg not in STT_ENGINES:
+        console.print(f"[yellow]Motor desconhecido:[/] {arg}  "
+                      f"[dim](opções: {', '.join(STT_ENGINES)})[/]")
+        return
+
+    # transcribe() lê config.STT_ENGINE a cada chamada, então sobrescrever aqui
+    # já troca o motor da próxima transcrição — sem reiniciar.
+    from core import stt
+
+    config.STT_ENGINE = arg
+    console.print(f"[cyan]Motor de STT trocado para[/] [bright_white]{arg}[/].")
+    if not stt.available():
+        console.print(f"[yellow]Atenção: dependências de '{arg}' não instaladas — "
+                      f"a transcrição vai falhar até instalá-las.[/]")
+
+
 def handle(raw: str, ctx: dict) -> bool:
     raw = raw.strip()
     if not raw.startswith("/"):
@@ -79,6 +110,10 @@ def handle(raw: str, ctx: dict) -> bool:
         ctx["voice_mode"] = not ctx["voice_mode"]
         estado = "ativado" if ctx["voice_mode"] else "desativado"
         console.print(f"[cyan]Modo voz {estado}.[/]")
+        return True
+
+    if cmd == "/stt":
+        _handle_stt(arg, ctx)
         return True
 
     if cmd == "/modelo":

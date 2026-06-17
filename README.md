@@ -87,6 +87,14 @@ para parar; ou digite um texto e Enter como atalho. A transcrição usa o Whispe
 As respostas são renderizadas como Markdown no terminal; antes da síntese de voz a
 marcação é removida para a fala não soletrar símbolos.
 
+Enquanto a resposta não começa, um indicador mostra **"Carregando modelo..."** se o
+Ollama ainda está subindo o modelo na VRAM (cold start) ou **"Pensando..."** quando
+ele já está carregado e gerando.
+
+**Interromper a fala (barge-in):** no modo voz, pressione **Esc** para o Oráculo parar
+de falar na hora e liberar o prompt para a próxima mensagem — sem precisar esperar ele
+terminar de ler a resposta.
+
 ## Estrutura
 
 ```
@@ -103,6 +111,7 @@ oraculo/
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
 │   ├── audio.py     # Captura de microfone + reprodução
+│   ├── keyboard.py  # Monitor de tecla no terminal (barge-in por Esc)
 │   ├── telemetry.py # Latência por estágio + tokens/s (opt-in)
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── requirements.txt

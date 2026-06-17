@@ -10,7 +10,7 @@ USER_NAME = None  # None → detecta pelo usuário do sistema (getpass.getuser)
 
 # --- Modelo Ollama ---
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "qwen2.5:7b"
+OLLAMA_MODEL = "gemma4:e4b"
 
 # --- Parâmetros do modelo ---
 TEMPERATURE = 0.7

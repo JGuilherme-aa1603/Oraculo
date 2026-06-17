@@ -16,6 +16,9 @@ class OraculoChain:
     def __init__(self, model_name: str = config.OLLAMA_MODEL):
         self.model_name = model_name
         self.memory = ConversationMemory()
+        # Metadata do último stream (uso de tokens/durações do Ollama) para a
+        # telemetria ler. Preenchido ao final de cada stream bem-sucedido.
+        self.last_usage: dict = {"usage": None, "meta": None}
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", config.SYSTEM_PROMPT),
@@ -35,15 +38,26 @@ class OraculoChain:
     def stream(self, user_input: str) -> Iterator[str]:
         """Gera a resposta em streaming, acumulando na memória ao final."""
         chunks: list[str] = []
+        full = None
         for chunk in self.pipeline.stream(
             {"input": user_input, "history": self.memory.messages}
         ):
+            # Agrega TODOS os chunks (mesmo sem conteúdo) para preservar o
+            # metadata de uso/duração que o Ollama anexa ao chunk final.
+            full = chunk if full is None else full + chunk
             # Remove caracteres CJK que o modelo às vezes vaza no meio do texto.
             text = textproc.strip_cjk(chunk.content) if chunk.content else ""
             if text:
                 chunks.append(text)
                 yield text
 
+        # Só roda se o stream foi consumido até o fim (numa interrupção via
+        # KeyboardInterrupt o gerador é fechado antes daqui — last_usage e a
+        # memória não são atualizados, exatamente como antes).
+        self.last_usage = {
+            "usage": getattr(full, "usage_metadata", None),
+            "meta": getattr(full, "response_metadata", None),
+        }
         response = "".join(chunks)
         self.memory.add_user(user_input)
         self.memory.add_assistant(response)

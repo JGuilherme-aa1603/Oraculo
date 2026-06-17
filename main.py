@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 
 import config
-from core import commands, history as history_mod, speaker as speaker_mod
+from core import commands, history as history_mod, speaker as speaker_mod, telemetry
 from core.chain import OraculoChain
 from core.splash import show_splash
 
@@ -30,6 +30,7 @@ def _listen(ctx: dict) -> str | None:
     escape. Retorna o texto ou None se nada foi captado."""
     from core import audio, stt
 
+    ctx["last_stt_seconds"] = None
     typed = console.input(
         "[dim][voz] Enter para começar a gravar (ou digite e Enter):[/] "
     ).strip()
@@ -40,7 +41,9 @@ def _listen(ctx: dict) -> str | None:
         console.print("[dim](gravando... Enter para parar)[/]")
         path = audio.record_ptt()
         console.print("[dim](transcrevendo...)[/]")
+        _stt_t0 = time.monotonic()
         text = stt.transcribe(path)
+        ctx["last_stt_seconds"] = time.monotonic() - _stt_t0
     except RuntimeError as exc:
         console.print(f"[yellow]{exc}[/]")
         console.print("[yellow]Voltando ao modo texto.[/]")
@@ -94,10 +97,15 @@ def main() -> None:
             continue
 
         history.record("user", user_input)
+        stt_seconds = ctx.pop("last_stt_seconds", None)
         console.print(f"[bold bright_cyan]{config.ASSISTANT_NAME}:[/]")
         # No modo voz, a fala é sintetizada frase a frase JÁ DURANTE a geração,
         # sobreposta à escrita — não espera a resposta inteira terminar.
         speaker = speaker_mod.StreamSpeaker() if ctx["voice_mode"] else None
+        # Telemetria do turno: t0 começa aqui (pós-STT) — o STT entra como estágio
+        # próprio. Marcações e métricas são best-effort e não alteram o turno.
+        tel = telemetry.TurnTelemetry()
+        tel.mode = "voz" if speaker else "texto"
         try:
             chunks: list[str] = []
             # Preview ao vivo enquanto a resposta chega, depois render final.
@@ -112,6 +120,7 @@ def main() -> None:
             with Live(console=console, refresh_per_second=6, transient=True,
                       vertical_overflow="crop") as live:
                 for token in chain.stream(user_input):
+                    tel.mark("first_token")
                     chunks.append(token)
                     if speaker:
                         speaker.feed(token)
@@ -122,6 +131,7 @@ def main() -> None:
             response = "".join(chunks)
             console.print(Markdown(response))
             history.record("assistant", response)
+            tel.set_llm(**chain.last_usage)
         except KeyboardInterrupt:
             console.print("\n[yellow](resposta interrompida)[/]")
         except Exception as exc:  # noqa: BLE001
@@ -131,6 +141,13 @@ def main() -> None:
                 err = speaker.close()
                 if err:
                     console.print(f"[yellow](voz indisponível: {err})[/]")
+                tel.mark_at("first_audio", speaker.first_audio_at)
+            # Telemetria nunca quebra o turno: tudo em try/except próprio.
+            try:
+                tel.set_stage("stt", stt_seconds)
+                telemetry.log_turn(tel.finish())
+            except Exception:  # noqa: BLE001
+                pass
 
 
 if __name__ == "__main__":

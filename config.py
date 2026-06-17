@@ -86,8 +86,11 @@ RECENT_SESSIONS_ON_SPLASH = 3
 # --- Telemetria ---
 # Defaults False → custo zero (nada escrito nem impresso). Para desenvolvimento,
 # ligue TELEMETRY_CONSOLE para ver um resumo de 1 linha por turno.
-TELEMETRY_ENABLED = False      # True → append em ~/.oraculo/telemetry/<data>.jsonl
-TELEMETRY_CONSOLE = False      # True → resumo de 1 linha por turno no terminal
+# Também leem variáveis de ambiente (qualquer valor não-vazio = True):
+#   TELEMETRY_CONSOLE=1 python main.py
+#   TELEMETRY_ENABLED=1 python main.py
+TELEMETRY_ENABLED = bool(os.environ.get("TELEMETRY_ENABLED"))
+TELEMETRY_CONSOLE = bool(os.environ.get("TELEMETRY_CONSOLE"))
 TELEMETRY_DIR = DATA_DIR / "telemetry"
 
 # --- Rótulo de hardware exibido na splash (informativo) ---

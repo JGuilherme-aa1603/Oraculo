@@ -83,6 +83,13 @@ DATA_DIR = Path(os.path.expanduser("~/.oraculo"))
 SESSIONS_DIR = DATA_DIR / "sessions"
 RECENT_SESSIONS_ON_SPLASH = 3
 
+# --- Telemetria ---
+# Defaults False → custo zero (nada escrito nem impresso). Para desenvolvimento,
+# ligue TELEMETRY_CONSOLE para ver um resumo de 1 linha por turno.
+TELEMETRY_ENABLED = False      # True → append em ~/.oraculo/telemetry/<data>.jsonl
+TELEMETRY_CONSOLE = False      # True → resumo de 1 linha por turno no terminal
+TELEMETRY_DIR = DATA_DIR / "telemetry"
+
 # --- Rótulo de hardware exibido na splash (informativo) ---
 DEVICE_LABEL = "CUDA RTX 4060"
 

@@ -13,6 +13,7 @@ escondendo sua latência. O áudio nunca toca o disco no caminho do streaming.
 
 import queue
 import threading
+import time
 
 from core import text as textproc
 
@@ -36,6 +37,8 @@ class StreamSpeaker:
         self._sentences: queue.Queue = queue.Queue()
         self._wavs: queue.Queue = queue.Queue(maxsize=1)
         self._error: Exception | None = None
+        # Instante monotônico em que o 1º bloco começou a tocar (telemetria/TTFA).
+        self.first_audio_at: float | None = None
 
         self._synth = threading.Thread(target=self._synth_loop, daemon=True)
         self._play = threading.Thread(target=self._play_loop, daemon=True)
@@ -98,6 +101,8 @@ class StreamSpeaker:
                 continue  # drena a fila sem tocar, para a síntese não travar
             try:
                 samples, sr = item
+                if self.first_audio_at is None:
+                    self.first_audio_at = time.monotonic()
                 audio.play_array(samples, sr)
             except Exception as exc:  # noqa: BLE001
                 self._error = self._error or exc

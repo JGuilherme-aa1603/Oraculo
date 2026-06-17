@@ -103,6 +103,7 @@ oraculo/
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
 │   ├── audio.py     # Captura de microfone + reprodução
+│   ├── telemetry.py # Latência por estágio + tokens/s (opt-in)
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── requirements.txt
 └── README.md
@@ -116,6 +117,31 @@ recentes" na splash.
 Ajuste `config.py` para trocar o modelo, parâmetros de geração (temperatura,
 `num_ctx`, `MAX_TOKENS`/num_predict), tamanho da memória, system prompt, modelo do
 Whisper, voz do Piper e o modo padrão (`VOICE_MODE_DEFAULT`).
+
+## Telemetria
+
+Instrumentação opcional de cada turno para medir o pipeline (STT → LLM → TTS):
+tempo de transcrição (STT), TTFT (time-to-first-token), tokens/s, tempo até a 1ª
+fala (TTFA) e a duração total do turno. Desligada por padrão — **custo zero** com
+ambas as flags em `False`.
+
+Em `config.py`:
+
+| Flag | Efeito |
+|------|--------|
+| `TELEMETRY_CONSOLE` | `True` → imprime um resumo de 1 linha por turno no terminal. Bom para desenvolvimento. |
+| `TELEMETRY_ENABLED` | `True` → faz append de 1 objeto JSON por turno em `~/.oraculo/telemetry/<AAAA-MM-DD>.jsonl`. |
+
+Resumo de console (os campos de voz são omitidos no modo texto):
+
+```
+telemetria turno 3.2s · STT 0.8s · TTFT 0.4s · 142 tok @ 38 tok/s · 1a fala 1.1s
+```
+
+A taxa de tokens/s vem das métricas do próprio Ollama (`eval_count`/`eval_duration`)
+quando disponíveis; TTFT e o total são sempre medidos localmente. A telemetria é
+best-effort: um erro de medição nunca interrompe a conversa, e nenhuma dependência
+nova é exigida (apenas a biblioteca-padrão + `rich`).
 
 ## Roadmap
 

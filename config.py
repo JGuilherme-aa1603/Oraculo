@@ -19,6 +19,13 @@ MAX_TOKENS = 2000    # num_predict — limite de tokens na resposta.
                      # Ajustável: respostas mais longas podem exigir um valor maior;
                      # para conversa normal, 2000 é folgado.
 
+# --- Raciocínio (thinking) ---
+# Modelos com capacidade "thinking" (gemma4, qwen3...) podem raciocinar antes de
+# responder. Custa latência, então o padrão é desligado; /think alterna na sessão.
+# (No futuro este flag pode virar um modo "auto".)
+THINKING_DEFAULT = False         # liga o raciocínio por padrão
+SHOW_THINKING_DEFAULT = False    # exibe o texto do raciocínio ao vivo (Ctrl+O alterna)
+
 # --- Memória ---
 MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em pares user/assistant)
 

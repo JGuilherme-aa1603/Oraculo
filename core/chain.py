@@ -19,6 +19,8 @@ class OraculoChain:
         # Metadata do último stream (uso de tokens/durações do Ollama) para a
         # telemetria ler. Preenchido ao final de cada stream bem-sucedido.
         self.last_usage: dict = {"usage": None, "meta": None}
+        # Raciocínio (thinking): None = padrão do modelo; True/False = explícito.
+        self.reasoning: bool | None = None
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", config.SYSTEM_PROMPT),
@@ -26,17 +28,27 @@ class OraculoChain:
                 ("human", "{input}"),
             ]
         )
-        self.llm = build_llm(self.model_name)
+        self.llm = build_llm(self.model_name, reasoning=self.reasoning)
         self.pipeline = self.prompt | self.llm
 
     def set_model(self, model_name: str) -> None:
-        """Troca o modelo ativo em tempo de execução, preservando a memória."""
+        """Troca o modelo ativo em tempo de execução, preservando memória e reasoning."""
         self.model_name = model_name
-        self.llm = build_llm(model_name)
+        self.llm = build_llm(model_name, reasoning=self.reasoning)
         self.pipeline = self.prompt | self.llm
 
-    def stream(self, user_input: str) -> Iterator[str]:
-        """Gera a resposta em streaming, acumulando na memória ao final."""
+    def set_thinking(self, enabled: bool) -> None:
+        """Liga/desliga o raciocínio (thinking), recriando o LLM."""
+        self.reasoning = bool(enabled)
+        self.llm = build_llm(self.model_name, reasoning=self.reasoning)
+        self.pipeline = self.prompt | self.llm
+
+    def stream(self, user_input: str) -> Iterator[tuple[str, str]]:
+        """Gera a resposta em streaming como eventos `(tipo, texto)`:
+          - ("think", ...):  tokens de raciocínio (só se o thinking estiver ligado);
+          - ("answer", ...): tokens da resposta final.
+        Só a resposta final entra na memória; o raciocínio é efêmero.
+        """
         chunks: list[str] = []
         full = None
         for chunk in self.pipeline.stream(
@@ -45,11 +57,15 @@ class OraculoChain:
             # Agrega TODOS os chunks (mesmo sem conteúdo) para preservar o
             # metadata de uso/duração que o Ollama anexa ao chunk final.
             full = chunk if full is None else full + chunk
+            # Raciocínio vem num canal separado (additional_kwargs), nunca em content.
+            reasoning = (chunk.additional_kwargs or {}).get("reasoning_content")
+            if reasoning:
+                yield ("think", reasoning)
             # Remove caracteres CJK que o modelo às vezes vaza no meio do texto.
             text = textproc.strip_cjk(chunk.content) if chunk.content else ""
             if text:
                 chunks.append(text)
-                yield text
+                yield ("answer", text)
 
         # Só roda se o stream foi consumido até o fim (numa interrupção via
         # KeyboardInterrupt o gerador é fechado antes daqui — last_usage e a

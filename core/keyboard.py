@@ -13,27 +13,41 @@ import threading
 from collections.abc import Callable, Iterator
 
 ESC = b"\x1b"
+CTRL_O = b"\x0f"
 
 
 @contextlib.contextmanager
-def watch_key(target: bytes, on_press: Callable[[], None]) -> Iterator[None]:
-    """Enquanto o bloco roda, observa o stdin; ao receber `target`, chama
-    `on_press()` (uma única vez) e para de observar.
+def watch_key(
+    target: bytes,
+    on_press: Callable[[], None],
+    *,
+    once: bool = True,
+    preserve_signals: bool = False,
+) -> Iterator[None]:
+    """Enquanto o bloco roda, observa o stdin e chama `on_press()` a cada vez que
+    a tecla `target` é pressionada.
 
-    `target` é o byte da tecla (ex.: `ESC`). Sequências de escape de teclas
-    especiais (setas, F1...) começam com ESC mas vêm seguidas de mais bytes —
-    elas são drenadas e ignoradas, então só um ESC "puro" dispara o callback.
+    `once=True` para após o primeiro disparo (ex.: Esc interrompe a fala);
+    `once=False` continua observando (ex.: Ctrl+O alterna a exibição do raciocínio).
+
+    `preserve_signals=True` usa modo cbreak, que mantém os sinais do terminal —
+    Ctrl+C continua gerando KeyboardInterrupt (essencial durante a geração).
+    `False` usa modo raw, que engole tudo (Ctrl+C não encerra durante a fala).
+
+    Sequências de escape de teclas especiais (setas, F1...) começam com ESC mas
+    vêm seguidas de mais bytes; quando `target` é ESC, elas são drenadas e
+    ignoradas, então só um ESC "puro" dispara o callback.
     """
     try:
         import select
         import termios
         import tty
     except ImportError:
-        yield                      # plataforma sem termios → sem barge-in
+        yield                      # plataforma sem termios → no-op
         return
 
     if not sys.stdin.isatty():
-        yield                      # entrada não é um terminal → sem barge-in
+        yield                      # entrada não é um terminal → no-op
         return
 
     fd = sys.stdin.fileno()
@@ -43,11 +57,12 @@ def watch_key(target: bytes, on_press: Callable[[], None]) -> Iterator[None]:
         yield
         return
 
+    set_mode = tty.setcbreak if preserve_signals else tty.setraw
     stop = threading.Event()
 
     def _loop() -> None:
         try:
-            tty.setraw(fd, termios.TCSANOW)
+            set_mode(fd, termios.TCSANOW)
             while not stop.is_set():
                 ready, _, _ = select.select([fd], [], [], 0.05)
                 if not ready:
@@ -56,14 +71,13 @@ def watch_key(target: bytes, on_press: Callable[[], None]) -> Iterator[None]:
                 if ch != target:
                     continue
                 if target == ESC:
-                    # ESC puro vs. início de sequência (seta etc.): se houver
-                    # mais bytes imediatamente, é uma sequência — drena e ignora.
                     more, _, _ = select.select([fd], [], [], 0.02)
                     if more:
-                        os.read(fd, 16)
+                        os.read(fd, 16)   # drena o resto da sequência
                         continue
                 on_press()
-                return
+                if once:
+                    return
         except Exception:  # noqa: BLE001 — qualquer falha de terminal: só não observa
             pass
 

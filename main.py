@@ -15,6 +15,7 @@ import urllib.request
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -23,6 +24,7 @@ from core import (
     commands,
     history as history_mod,
     keyboard,
+    llm as llm_mod,
     speaker as speaker_mod,
     telemetry,
 )
@@ -53,32 +55,37 @@ def _model_is_loaded(model_name: str) -> bool:
 
 
 class _ThinkingStatus:
-    """Spinner de espera até o 1º token chegar.
+    """Spinner de espera até a 1ª saída do modelo chegar.
 
-    Decide o rótulo pelo estado real do modelo no Ollama:
-      - já carregado na VRAM → "Pensando..." (ciano);
-      - ainda não carregado  → "Carregando modelo..." (amarelo) e, em background,
-        verifica o /api/ps até o modelo subir, então troca para "Pensando...".
-    `first_token()` encerra a espera — daí o streaming do texto assume o Live.
+    Decide o rótulo pelo estado real:
+      - modelo ainda não carregado → "Carregando modelo..." (amarelo) e, em
+        background, verifica o /api/ps até subir, então troca o rótulo;
+      - carregado + thinking ligado → "Pensando..." (o modelo vai raciocinar);
+      - carregado + thinking desligado → "Gerando..." (honesto: não há raciocínio).
+    `first_token()` encerra a espera — daí o streaming assume o Live.
     """
 
-    def __init__(self, live: Live, model_name: str) -> None:
+    def __init__(self, live: Live, model_name: str, thinking: bool) -> None:
         self._live = live
         self._model = model_name
+        self._thinking = thinking
         self._done = threading.Event()
 
     def start(self) -> None:
         if _model_is_loaded(self._model):
-            self._show("Pensando...", "cyan")
+            self._show(*self._wait_label())
         else:
             self._show("Carregando modelo...", "yellow")
             threading.Thread(target=self._poll, daemon=True).start()
+
+    def _wait_label(self) -> tuple[str, str]:
+        return ("Pensando...", "cyan") if self._thinking else ("Gerando...", "cyan")
 
     def _poll(self) -> None:
         while not self._done.wait(timeout=0.4):
             if _model_is_loaded(self._model):
                 if not self._done.is_set():
-                    self._show("Pensando...", "cyan")
+                    self._show(*self._wait_label())
                 return
 
     def _show(self, label: str, color: str) -> None:
@@ -87,6 +94,27 @@ class _ThinkingStatus:
 
     def first_token(self) -> None:
         self._done.set()
+
+
+def _thinking_view(show: bool, reasoning: str):
+    """Renderable da fase de raciocínio: o texto real (Ctrl+O ligado) ou um
+    spinner honesto "Pensando..." (Ctrl+O desligado)."""
+    if show:
+        shown = reasoning.strip()
+        if len(shown) > 1200:        # mostra só a cauda para não estourar a tela
+            shown = "..." + shown[-1200:]
+        return Panel(
+            Text(shown or "...", style="dim italic"),
+            title="[cyan]Pensando[/]",
+            subtitle="[dim]Ctrl+O: ocultar[/]",
+            title_align="left",
+            subtitle_align="right",
+            border_style="dim cyan",
+        )
+    return Spinner(
+        "dots",
+        text=Text.from_markup("[cyan]Pensando...[/]  [dim](Ctrl+O: ver raciocínio)[/]"),
+    )
 
 
 def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exception | None:
@@ -162,7 +190,13 @@ def main() -> None:
         "chain": chain,
         "running": True,
         "voice_mode": config.VOICE_MODE_DEFAULT,
+        "thinking": False,
+        "show_thinking": config.SHOW_THINKING_DEFAULT,
     }
+    # Liga o thinking por padrão só se o modelo realmente suportar.
+    if config.THINKING_DEFAULT and llm_mod.supports_thinking(chain.model_name):
+        ctx["thinking"] = True
+        chain.set_thinking(True)
 
     while ctx["running"]:
         try:
@@ -194,7 +228,9 @@ def main() -> None:
         tel.mode = "voz" if speaker else "texto"
         try:
             chunks: list[str] = []
-            first_token = False
+            reasoning: list[str] = []
+            got_output = False
+            answering = False
             # Preview ao vivo enquanto a resposta chega, depois render final.
             # transient=True + vertical_overflow="crop": o Live mostra só a
             # última tela e redesenha NO LUGAR (sem isso, resposta mais alta que
@@ -204,21 +240,45 @@ def main() -> None:
             # O throttle (_REFRESH_INTERVAL) evita reparsear o Markdown a cada
             # token; menos repaints = menos uso da iGPU (compositor).
             last_render = 0.0
+
+            def _toggle_thinking() -> None:
+                ctx["show_thinking"] = not ctx.get("show_thinking", False)
+
+            # Ctrl+O alterna a exibição do raciocínio ao vivo. Só observa o
+            # teclado quando o thinking está ligado; cbreak preserva o Ctrl+C,
+            # que continua interrompendo a resposta.
+            if ctx.get("thinking") and sys.stdin.isatty():
+                key_watch = keyboard.watch_key(
+                    keyboard.CTRL_O, _toggle_thinking,
+                    once=False, preserve_signals=True,
+                )
+            else:
+                key_watch = contextlib.nullcontext()
+
             with Live(console=console, refresh_per_second=6, transient=True,
-                      vertical_overflow="crop") as live:
-                # Spinner de espera: "Carregando modelo..." vira "Pensando..."
-                # quando o modelo sobe; o 1º token o substitui pelo texto.
-                status = _ThinkingStatus(live, chain.model_name)
+                      vertical_overflow="crop") as live, key_watch:
+                status = _ThinkingStatus(live, chain.model_name, ctx.get("thinking", False))
                 status.start()
-                for token in chain.stream(user_input):
-                    if not first_token:
-                        first_token = True
-                        status.first_token()
-                        tel.mark("first_token")
-                    chunks.append(token)
-                    if speaker:
-                        speaker.feed(token)
+                for kind, text in chain.stream(user_input):
                     now = time.monotonic()
+                    if not got_output:
+                        got_output = True
+                        status.first_token()        # encerra o spinner de espera
+                        tel.mark("first_token")
+                    if kind == "think":
+                        reasoning.append(text)
+                        if now - last_render >= _REFRESH_INTERVAL:
+                            live.update(_thinking_view(
+                                ctx.get("show_thinking"), "".join(reasoning)))
+                            last_render = now
+                        continue
+                    # resposta
+                    if not answering:
+                        answering = True
+                        last_render = 0.0           # força limpar o raciocínio e renderizar
+                    chunks.append(text)
+                    if speaker:
+                        speaker.feed(text)
                     if now - last_render >= _REFRESH_INTERVAL:
                         live.update(Markdown("".join(chunks)))
                         last_render = now

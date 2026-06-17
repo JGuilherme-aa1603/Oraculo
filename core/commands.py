@@ -10,12 +10,14 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 """
 
 import config
+from core import llm as llm_mod
 
 STT_ENGINES = ("whisper", "parakeet")
 
 AJUDA_TEXT = """[bold cyan]Comandos disponíveis[/]
   [bright_cyan]/ajuda[/]   mostra esta ajuda
   [bright_cyan]/voz[/]     alterna entre modo voz e modo texto
+  [bright_cyan]/think[/]   liga/desliga o raciocínio (thinking); Ctrl+O mostra o texto
   [bright_cyan]/stt[/]     lista motores de transcrição ou troca com [dim]/stt <motor>[/]
   [bright_cyan]/modelo[/]  lista modelos do Ollama ou troca com [dim]/modelo <nome>[/]
   [bright_cyan]/limpar[/]  apaga a memória da conversa atual
@@ -52,6 +54,34 @@ def _handle_modelo(arg: str, ctx: dict) -> None:
 
     chain.set_model(arg)
     console.print(f"[cyan]Modelo trocado para[/] [bright_white]{arg}[/].")
+
+    # set_model preserva o reasoning; se o novo modelo não suporta thinking,
+    # desliga para o próximo turno não falhar com erro 400.
+    if ctx.get("thinking") and not llm_mod.supports_thinking(arg):
+        ctx["thinking"] = False
+        chain.set_thinking(False)
+        console.print(f"[yellow]{arg} não suporta raciocínio — thinking desativado.[/]")
+
+
+def _handle_think(ctx: dict) -> None:
+    console = ctx["console"]
+    chain = ctx["chain"]
+    want = not ctx.get("thinking", False)
+
+    if want and not llm_mod.supports_thinking(chain.model_name):
+        console.print(
+            f"[yellow]O modelo [bright_white]{chain.model_name}[/] não suporta "
+            f"raciocínio (thinking).[/]"
+        )
+        return
+
+    ctx["thinking"] = want
+    chain.set_thinking(want)
+    if want:
+        console.print("[cyan]Raciocínio (thinking) ativado.[/] "
+                      "[dim]Durante a resposta, Ctrl+O mostra/oculta o texto.[/]")
+    else:
+        console.print("[cyan]Raciocínio (thinking) desativado.[/]")
 
 
 def _handle_stt(arg: str, ctx: dict) -> None:
@@ -110,6 +140,10 @@ def handle(raw: str, ctx: dict) -> bool:
         ctx["voice_mode"] = not ctx["voice_mode"]
         estado = "ativado" if ctx["voice_mode"] else "desativado"
         console.print(f"[cyan]Modo voz {estado}.[/]")
+        return True
+
+    if cmd == "/think":
+        _handle_think(ctx)
         return True
 
     if cmd == "/stt":

@@ -76,6 +76,7 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 
 - `/ajuda` — lista os comandos
 - `/voz` — alterna entre modo voz e modo texto
+- `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
 - `/modelo` — lista os modelos do Ollama; `/modelo <nome>` troca o ativo
 - `/limpar` — apaga a memória da conversa atual
@@ -95,6 +96,12 @@ ele já está carregado e gerando.
 de falar na hora e liberar o prompt para a próxima mensagem — sem precisar esperar ele
 terminar de ler a resposta.
 
+**Raciocínio (thinking):** modelos com a capacidade `thinking` (gemma4, qwen3...) podem
+raciocinar antes de responder. Ligue/desligue com `/think` (desligado por padrão, pois
+adiciona latência). Quando ligado, o indicador mostra **"Pensando..."** apenas enquanto
+há raciocínio real acontecendo; pressione **Ctrl+O** durante a resposta para mostrar/ocultar
+o texto do raciocínio ao vivo. Modelos sem suporte são detectados e o `/think` avisa.
+
 ## Estrutura
 
 ```
@@ -104,8 +111,8 @@ oraculo/
 ├── core/
 │   ├── llm.py       # Configuração do Ollama + LangChain
 │   ├── memory.py    # Memória de conversação (janela deslizante, em pares)
-│   ├── chain.py     # Pipeline: system prompt + memória + LLM (troca de modelo)
-│   ├── commands.py  # Roteamento de comandos (/ajuda, /voz, /modelo, /limpar, /sair)
+│   ├── chain.py     # Pipeline: system prompt + memória + LLM (eventos think/answer)
+│   ├── commands.py  # Roteamento de comandos (/ajuda, /voz, /think, /modelo, ...)
 │   ├── history.py   # Persistência de sessões em JSON (~/.oraculo/sessions)
 │   ├── stt.py       # Whisper (faster-whisper) — áudio → texto
 │   ├── tts.py       # Kokoro/Piper — texto → áudio

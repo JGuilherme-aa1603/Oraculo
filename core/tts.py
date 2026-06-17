@@ -4,7 +4,8 @@ Dois motores selecionáveis por config.TTS_ENGINE:
   - "kokoro": voz feminina pt-BR natural (kokoro-onnx, roda na CPU)
   - "piper":  binário externo Piper (voz masculina, leve)
 
-A interface pública `speak(text)` gera um WAV em disco e devolve o caminho.
+`synth(text)` devolve o PCM em memória (caminho quente do streaming);
+`speak(text)` gera um WAV em disco e devolve o caminho (fallback).
 """
 
 import os
@@ -43,14 +44,19 @@ def _get_kokoro():
 def _speak_kokoro(text: str, output_path: str) -> str:
     import soundfile as sf
 
-    samples, sample_rate = _get_kokoro().create(
+    samples, sample_rate = _synth_kokoro(text)
+    sf.write(output_path, samples, sample_rate)
+    return output_path
+
+
+def _synth_kokoro(text: str):
+    """Sintetiza com o Kokoro e devolve (samples float32, sample_rate)."""
+    return _get_kokoro().create(
         text,
         voice=config.KOKORO_VOICE,
         speed=config.KOKORO_SPEED,
         lang=config.KOKORO_LANG,
     )
-    sf.write(output_path, samples, sample_rate)
-    return output_path
 
 
 # ----------------------------- Piper -----------------------------------------
@@ -58,7 +64,8 @@ def _piper_available() -> bool:
     return shutil.which(config.PIPER_BIN) is not None
 
 
-def _speak_piper(text: str, output_path: str) -> str:
+def _piper_check() -> None:
+    """Valida que o binário e o modelo de voz do Piper existem."""
     if not _piper_available():
         raise RuntimeError(
             f"Piper não encontrado ('{config.PIPER_BIN}'). Instale com:\n"
@@ -70,6 +77,46 @@ def _speak_piper(text: str, output_path: str) -> str:
             "Baixe o .onnx e o .onnx.json (ex.: pt_BR-faber-medium) e coloque na\n"
             "raiz do projeto, ou ajuste PIPER_VOICE no config.py."
         )
+
+
+def _piper_sample_rate() -> int:
+    """Lê o sample rate do JSON da voz Piper; fallback 22050 se não achar."""
+    import json
+
+    candidates = (
+        config.PIPER_VOICE + ".json",
+        config.PIPER_VOICE.replace(".onnx", ".onnx.json"),
+    )
+    for json_path in candidates:
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, encoding="utf-8") as fh:
+                    return int(json.load(fh)["audio"]["sample_rate"])
+            except (KeyError, ValueError, OSError):
+                break
+    return 22050
+
+
+def _synth_piper(text: str):
+    """Sintetiza com o Piper e devolve (samples int16, sample_rate), em memória."""
+    import numpy as np
+
+    _piper_check()
+    proc = subprocess.run(
+        [config.PIPER_BIN, "--model", config.PIPER_VOICE, "--output_raw"],
+        input=text.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="ignore").strip()
+        raise RuntimeError(f"Piper falhou ao sintetizar: {err}")
+    samples = np.frombuffer(proc.stdout, dtype=np.int16)
+    return samples, _piper_sample_rate()
+
+
+def _speak_piper(text: str, output_path: str) -> str:
+    _piper_check()
 
     # stdout/stderr capturados para silenciar os logs de info do Piper;
     # só são exibidos se o processo falhar.
@@ -104,3 +151,14 @@ def speak(text: str, output_path: str = "/tmp/oraculo_tts.wav") -> str:
     if config.TTS_ENGINE == "kokoro":
         return _speak_kokoro(text, output_path)
     return _speak_piper(text, output_path)
+
+
+def synth(text: str):
+    """Sintetiza e devolve (samples, sample_rate) em memória, sem tocar o disco.
+
+    Kokoro devolve float32 [-1, 1]; Piper devolve int16. O dtype é preservado —
+    `audio.play_array` lida com ambos.
+    """
+    if config.TTS_ENGINE == "kokoro":
+        return _synth_kokoro(text)
+    return _synth_piper(text)

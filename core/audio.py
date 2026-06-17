@@ -93,3 +93,16 @@ def play(path: str) -> None:
     data, samplerate = sf.read(path)
     sd.play(data, samplerate)
     sd.wait()
+
+
+def play_array(samples, samplerate: int) -> None:
+    """Reproduz PCM já em memória (float32 do Kokoro ou int16 do Piper)."""
+    try:
+        import sounddevice as sd
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "Áudio indisponível. Instale portaudio e sounddevice."
+        ) from exc
+
+    sd.play(samples, samplerate)
+    sd.wait()

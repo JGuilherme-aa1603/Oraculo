@@ -5,10 +5,10 @@ em pedaços (tokens) durante a geração do LLM. Assim que uma frase completa su
 ela é sintetizada e tocada — a fala começa quase junto com a escrita.
 
 Dois threads em pipeline:
-  - síntese: lê frases, gera o WAV (Kokoro/Piper) — etapa cara.
-  - reprodução: toca os WAVs em ordem.
+  - síntese: lê frases, gera o PCM em memória (Kokoro/Piper) — etapa cara.
+  - reprodução: toca os blocos de PCM em ordem.
 Uma fila de tamanho 1 entre eles mantém a síntese no máximo uma frase à frente,
-escondendo sua latência sem deixar dois WAVs disputarem o mesmo arquivo.
+escondendo sua latência. O áudio nunca toca o disco no caminho do streaming.
 """
 
 import queue
@@ -74,16 +74,14 @@ class StreamSpeaker:
     def _synth_loop(self) -> None:
         from core import tts
 
-        n = 0
         while True:
             item = self._sentences.get()
             if item is None:
                 self._wavs.put(None)
                 return
             try:
-                wav = tts.speak(item, output_path=f"/tmp/oraculo_tts_{n % 2}.wav")
-                n += 1
-                self._wavs.put(wav)
+                samples, sr = tts.synth(item)
+                self._wavs.put((samples, sr))
             except Exception as exc:  # noqa: BLE001
                 self._error = self._error or exc
                 self._wavs.put(None)
@@ -93,12 +91,13 @@ class StreamSpeaker:
         from core import audio
 
         while True:
-            wav = self._wavs.get()
-            if wav is None:
+            item = self._wavs.get()
+            if item is None:
                 return
             if self._error is not None:
                 continue  # drena a fila sem tocar, para a síntese não travar
             try:
-                audio.play(wav)
+                samples, sr = item
+                audio.play_array(samples, sr)
             except Exception as exc:  # noqa: BLE001
                 self._error = self._error or exc

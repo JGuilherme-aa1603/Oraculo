@@ -17,6 +17,10 @@ from core import llm as llm_mod
 
 STT_ENGINES = ("whisper", "parakeet")
 
+# Comandos que também rodam fora do chat, via wrapper `oraculo <comando>`.
+# Só entram aqui os que não dependem do LLM (ctx["chain"] é None nesse modo).
+STANDALONE_COMMANDS = {"/transcrever", "/transcricao", "/ajuda", "/help", "/?"}
+
 AJUDA_TEXT = """[bold cyan]Comandos disponíveis[/]
   [bright_cyan]/ajuda[/]       mostra esta ajuda
   [bright_cyan]/voz[/]         alterna entre modo voz e modo texto

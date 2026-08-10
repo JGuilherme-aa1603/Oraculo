@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Wrapper para rodar o Oráculo de qualquer diretório usando o venv do projeto.
+#
+#   oraculo                          abre o chat
+#   oraculo transcrever <arquivo>    transcreve um áudio e sai
+#
+# Instalação (link simbólico em algum diretório do PATH):
+#   ln -s "$PWD/bin/oraculo" ~/.local/bin/oraculo
+#
+# readlink -f resolve o link até o arquivo real, para a raiz do projeto sair
+# certa mesmo chamando pelo symlink.
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+
+if [[ ! -x "$PY" ]]; then
+    echo "venv não encontrado em $ROOT/.venv" >&2
+    echo "Crie com: python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt" >&2
+    exit 1
+fi
+
+# Sem cd: o diretório atual continua sendo o do usuário, para caminhos relativos
+# (oraculo transcrever audio.ogg) funcionarem. O PYTHONPATH é o que faz o Python
+# achar os módulos do projeto; os modelos já são ancorados em PROJECT_ROOT.
+exec env PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PY" "$ROOT/main.py" "$@"

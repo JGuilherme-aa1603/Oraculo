@@ -172,6 +172,40 @@ def _listen(ctx: dict) -> str | None:
     return text
 
 
+def run_standalone(argv: list[str]) -> int:
+    """Executa um comando direto do shell, sem abrir o chat.
+
+    É o modo usado pelo wrapper `bin/oraculo`: `oraculo transcrever <arquivo>`.
+    Não instancia o modelo — os comandos permitidos aqui não precisam do Ollama.
+    A barra é opcional, e o resto da linha é remontado como veio (caminhos com
+    espaço funcionam sem aspas). Devolve o código de saída do processo.
+    """
+    raw = " ".join(argv).strip()
+    if not raw.startswith("/"):
+        raw = f"/{raw}"
+
+    cmd = raw.split(maxsplit=1)[0].lower()
+    if cmd not in commands.STANDALONE_COMMANDS:
+        console.print(
+            f"[yellow]'{cmd.lstrip('/')}' só funciona dentro do "
+            f"{config.ASSISTANT_NAME}.[/]\n"
+            f"[dim]Rode 'oraculo' sem argumentos para abrir o chat, ou "
+            f"'oraculo ajuda' para ver os comandos.[/]"
+        )
+        return 2
+
+    ctx = {
+        "console": console,
+        "chain": None,
+        "running": True,
+        "voice_mode": False,
+        "thinking": False,
+        "show_thinking": config.SHOW_THINKING_DEFAULT,
+    }
+    commands.handle(raw, ctx)
+    return 0
+
+
 def main() -> None:
     try:
         chain = OraculoChain()
@@ -305,4 +339,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Com argumentos, roda o comando e sai; sem argumentos, abre o chat.
+    if len(sys.argv) > 1:
+        sys.exit(run_standalone(sys.argv[1:]))
     main()

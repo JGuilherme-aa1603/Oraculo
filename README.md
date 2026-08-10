@@ -108,6 +108,12 @@ ao lado do áudio — ou em `TRANSCRIBE_OUTPUT_DIR`, se configurado.
 /transcrever ~/Downloads/WhatsApp Ptt 2026-08-01 at 8.14.38 PM.ogg --salvar
 ```
 
+Também funciona direto do shell, sem abrir o chat (ver [Comando global](#comando-global)):
+
+```fish
+oraculo transcrever ~/Downloads/audio.ogg --salvar
+```
+
 Não é preciso converter o formato: o faster-whisper decodifica via PyAV. Para áudios
 longos use o `whisper` — o `parakeet` trunca acima de ~30s (o comando avisa).
 
@@ -117,11 +123,34 @@ adiciona latência). Quando ligado, o indicador mostra **"Pensando..."** apenas 
 há raciocínio real acontecendo; pressione **Ctrl+O** durante a resposta para mostrar/ocultar
 o texto do raciocínio ao vivo. Modelos sem suporte são detectados e o `/think` avisa.
 
+### Comando global
+
+O wrapper `bin/oraculo` roda o projeto de qualquer diretório usando o venv, sem
+precisar ativar nada. Instale com um link simbólico em algum diretório do `PATH`:
+
+```fish
+ln -s (pwd)/bin/oraculo ~/.local/bin/oraculo
+ln -s (pwd)/completions/oraculo.fish ~/.config/fish/completions/  # completions (opcional)
+```
+
+Se `~/.local/bin` não estiver no `PATH`: `fish_add_path ~/.local/bin`.
+
+```fish
+oraculo                              # abre o chat
+oraculo transcrever audio.ogg -s     # transcreve e sai (sem carregar o Ollama)
+oraculo ajuda                        # lista os comandos
+```
+
+Com argumentos, o Oráculo executa o comando e sai; a barra é opcional. Só os
+comandos que não dependem do LLM rodam assim (`transcrever`, `ajuda`) — os demais
+avisam que só funcionam dentro do chat.
+
 ## Estrutura
 
 ```
 oraculo/
-├── main.py          # Entry point — loop de conversa (texto/voz)
+├── main.py          # Entry point — loop de conversa (texto/voz) e comandos do shell
+├── bin/oraculo      # Wrapper para rodar de qualquer diretório (link no PATH)
 ├── config.py        # Configurações centralizadas
 ├── core/
 │   ├── llm.py       # Configuração do Ollama + LangChain

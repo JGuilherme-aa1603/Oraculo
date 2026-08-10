@@ -28,6 +28,11 @@ Oráculo é um assistente local estilo Jarvis, 100% offline, desenvolvido em fas
 
 - Principal: `gemma4:e4b` (`OLLAMA_MODEL` em `config.py`). Suporta `thinking`, que fica
   **desligado por padrão** (`THINKING_DEFAULT = False`) por causa da latência; `/think` alterna.
+- **O `reasoning` é sempre explícito, nunca `None`.** O padrão do gemma4 é *pensar*, então
+  deixar o modelo decidir faz a interface mentir: o `/think` e a barra dizem "off" enquanto
+  o modelo gasta ~130 tokens de raciocínio por turno, e só obedece depois de alternar o
+  `/think` uma vez. `OraculoChain` começa com `reasoning=False` por isso. `reasoning=False`
+  é aceito por qualquer modelo; só `True` dá 400 em quem não suporta thinking.
 - `qwen2.5:7b` foi o modelo do MVP — bom equilíbrio, mas sem thinking. Continua válido como alternativa.
 - Embedding (Fase 4): `nomic-embed-text`
 - Evitar `num_ctx` alto — o padrão do Ollama pode ser 131072; manter 8192 para economizar VRAM.

@@ -13,7 +13,12 @@ def build_llm(model: str = config.OLLAMA_MODEL, *, reasoning: bool | None = None
 
     `reasoning`: True liga o raciocínio (thinking), False desliga explicitamente,
     None usa o padrão do modelo. Só é repassado ao ChatOllama quando não é None
-    (mandar `reasoning=True` para um modelo sem suporte gera erro 400).
+    (mandar `reasoning=True` para um modelo sem suporte gera erro 400; `False`
+    é aceito por qualquer modelo).
+
+    Prefira sempre um valor explícito: o padrão do modelo pode ser "pensar" (é o
+    caso do gemma4), e aí a interface acaba anunciando um estado que não é o real.
+    O OraculoChain nunca passa None por isso.
     """
     kwargs = dict(
         model=model,

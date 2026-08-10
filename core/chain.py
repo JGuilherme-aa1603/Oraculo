@@ -19,8 +19,18 @@ class OraculoChain:
         # Metadata do último stream (uso de tokens/durações do Ollama) para a
         # telemetria ler. Preenchido ao final de cada stream bem-sucedido.
         self.last_usage: dict = {"usage": None, "meta": None}
-        # Raciocínio (thinking): None = padrão do modelo; True/False = explícito.
-        self.reasoning: bool | None = None
+        # Raciocínio (thinking) SEMPRE explícito, nunca None.
+        #
+        # Deixar o padrão do modelo decidir faz a interface mentir: o gemma4
+        # raciocina por padrão, então com `reasoning=None` o Oráculo pensava em
+        # todo turno enquanto o /think e a barra de status diziam "desligado" —
+        # e só passava a obedecer depois de alternar o /think uma vez, que é o
+        # que finalmente escrevia o valor explícito.
+        #
+        # Começa desligado (custo zero); main.py liga no arranque se
+        # THINKING_DEFAULT estiver ligado E o modelo suportar. `reasoning=False`
+        # é aceito por qualquer modelo — só `True` dá 400 em quem não suporta.
+        self.reasoning: bool = False
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", config.SYSTEM_PROMPT),

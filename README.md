@@ -5,13 +5,15 @@ incrementais. Usa um modelo local via [Ollama](https://ollama.com) orquestrado p
 [LangChain](https://www.langchain.com).
 
 - **Fase 1 (MVP):** chat de terminal com memória de conversação.
-- **Fase 2 (Voz):** entrada/saída de voz opcional (Whisper STT + Piper TTS),
-  roteamento de comandos e persistência de sessões. O modo texto continua padrão.
+- **Fase 2 (Voz):** entrada/saída de voz opcional (Whisper STT + Kokoro TTS) com fala em
+  streaming e barge-in, roteamento de comandos, transcrição de arquivos, telemetria
+  opt-in e persistência de sessões. O modo texto continua padrão.
 
 ## Requisitos
 
 - Ollama rodando em `http://localhost:11434` (`ollama serve` se não estiver ativo)
-- Modelo `qwen2.5:7b` baixado (`ollama pull qwen2.5:7b`)
+- Modelo `gemma4:e4b` baixado (`ollama pull gemma4:e4b`) — ou outro, ajustando
+  `OLLAMA_MODEL` no `config.py`
 - Python 3.10+
 
 ## Instalação
@@ -176,8 +178,10 @@ recentes" na splash.
 ## Configuração
 
 Ajuste `config.py` para trocar o modelo, parâmetros de geração (temperatura,
-`num_ctx`, `MAX_TOKENS`/num_predict), tamanho da memória, system prompt, modelo do
-Whisper, voz do Piper e o modo padrão (`VOICE_MODE_DEFAULT`).
+`num_ctx`, `MAX_TOKENS`/num_predict), tamanho da memória, system prompt, motor e
+modelo de STT (`STT_ENGINE`, `WHISPER_MODEL`), motor e voz de TTS (`TTS_ENGINE`,
+`KOKORO_VOICE`), o raciocínio padrão (`THINKING_DEFAULT`) e o modo padrão
+(`VOICE_MODE_DEFAULT`).
 
 ## Telemetria
 
@@ -210,6 +214,6 @@ nova é exigida (apenas a biblioteca-padrão + `rich`).
 |------|-----------|--------|
 | 1 — MVP | Chat no terminal + memória + Ollama | ✅ Concluída |
 | 2 — Voz | Whisper (STT) + Piper (TTS) + comandos + persistência | ✅ Concluída |
-| 3 — Wake Word | OpenWakeWord + Resemblyzer (só sua voz) | ⏳ Futuro |
+| 3 — Wake Word | OpenWakeWord + VAD + Resemblyzer (só sua voz) | 🔜 Próxima |
 | 4 — RAG | Indexar notas do Obsidian (nomic-embed-text) | ⏳ Futuro |
 | 5 — Commands | Executar comandos do sistema com whitelist segura | ⏳ Futuro |

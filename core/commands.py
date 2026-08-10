@@ -1,4 +1,5 @@
-"""Roteamento de comandos do terminal (/ajuda, /voz, /stt, /modelo, /limpar, /sair).
+"""Roteamento de comandos do terminal (/ajuda, /voz, /stt, /transcrever, /modelo,
+/limpar, /sair).
 
 O loop principal passa um dicionário de contexto mutável (`ctx`) com:
   - console: rich.Console
@@ -9,19 +10,23 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 `handle()` retorna True se o input era um comando (e portanto NÃO deve ir ao LLM).
 """
 
+from pathlib import Path
+
 import config
 from core import llm as llm_mod
 
 STT_ENGINES = ("whisper", "parakeet")
 
 AJUDA_TEXT = """[bold cyan]Comandos disponíveis[/]
-  [bright_cyan]/ajuda[/]   mostra esta ajuda
-  [bright_cyan]/voz[/]     alterna entre modo voz e modo texto
-  [bright_cyan]/think[/]   liga/desliga o raciocínio (thinking); Ctrl+O mostra o texto
-  [bright_cyan]/stt[/]     lista motores de transcrição ou troca com [dim]/stt <motor>[/]
-  [bright_cyan]/modelo[/]  lista modelos do Ollama ou troca com [dim]/modelo <nome>[/]
-  [bright_cyan]/limpar[/]  apaga a memória da conversa atual
-  [bright_cyan]/sair[/]    encerra o Oráculo"""
+  [bright_cyan]/ajuda[/]       mostra esta ajuda
+  [bright_cyan]/voz[/]         alterna entre modo voz e modo texto
+  [bright_cyan]/think[/]       liga/desliga o raciocínio (thinking); Ctrl+O mostra o texto
+  [bright_cyan]/stt[/]         lista motores de transcrição ou troca com [dim]/stt <motor>[/]
+  [bright_cyan]/transcrever[/] transcreve um arquivo de áudio
+                 [dim]/transcrever <arquivo> [--salvar][/]
+  [bright_cyan]/modelo[/]      lista modelos do Ollama ou troca com [dim]/modelo <nome>[/]
+  [bright_cyan]/limpar[/]      apaga a memória da conversa atual
+  [bright_cyan]/sair[/]        encerra o Oráculo"""
 
 
 def _list_models() -> list[str]:
@@ -112,6 +117,115 @@ def _handle_stt(arg: str, ctx: dict) -> None:
                       f"a transcrição vai falhar até instalá-las.[/]")
 
 
+_SAVE_FLAGS = {"--salvar", "-s"}
+
+TRANSCREVER_USO = (
+    "[dim]Uso:[/] [bright_cyan]/transcrever <arquivo>[/] "
+    "[dim][--salvar][/]\n"
+    "[dim]  --salvar grava a transcrição em Markdown ao lado do áudio.[/]"
+)
+
+
+def _parse_alvo(arg: str) -> tuple[str, bool]:
+    """Separa o caminho das flags.
+
+    O caminho vem sem aspas na maioria das vezes e pode ter espaços (áudios do
+    WhatsApp têm), então as flags só são reconhecidas no fim da linha e o resto
+    inteiro é tratado como um caminho só."""
+    salvar = False
+    tokens = arg.split()
+    while tokens and tokens[-1].lower() in _SAVE_FLAGS:
+        salvar = True
+        tokens.pop()
+
+    caminho = " ".join(tokens)
+    if len(caminho) > 1 and caminho[0] == caminho[-1] and caminho[0] in "\"'":
+        caminho = caminho[1:-1]
+    return caminho, salvar
+
+
+def _com_progresso(segments, status, secs: float | None):
+    """Repassa os segmentos atualizando o spinner com a posição no áudio."""
+    from core.transcript import hms
+
+    for seg in segments:
+        total = f"/{hms(secs)}" if secs else ""
+        status.update(f"[dim]Transcrevendo... {hms(seg[1])}{total}[/]")
+        yield seg
+
+
+def _handle_transcrever(arg: str, ctx: dict) -> None:
+    console = ctx["console"]
+
+    if not arg:
+        console.print(TRANSCREVER_USO)
+        return
+
+    caminho, salvar = _parse_alvo(arg)
+    path = Path(caminho).expanduser()
+    if not path.is_file():
+        console.print(f"[yellow]Arquivo não encontrado:[/] {path}")
+        return
+
+    from core import stt, transcript
+
+    if not stt.available():
+        console.print(f"[yellow]O motor '{config.STT_ENGINE}' não está "
+                      f"instalado — veja /stt para trocar de motor.[/]")
+        return
+
+    if path.suffix.lower() not in config.TRANSCRIBE_EXTENSIONS:
+        console.print(f"[yellow]'{path.suffix}' não parece um formato de áudio; "
+                      f"vou tentar mesmo assim.[/]")
+
+    secs = stt.duration(str(path))
+    limite = config.TRANSCRIBE_PARAKEET_LIMIT
+    if config.STT_ENGINE == "parakeet" and secs and secs > limite:
+        console.print(f"[yellow]O parakeet trunca clipes acima de "
+                      f"{limite:.0f}s. Para este áudio, use /stt whisper.[/]")
+
+    dur = f"  [dim]({transcript.hms(secs)})[/]" if secs else ""
+    console.print(f"[bold cyan]Transcrevendo[/] [bright_white]{path.name}[/]{dur}"
+                  f"  [dim]· {transcript.engine_label()}[/]")
+
+    paras: list[tuple[float, str]] = []
+    interrompido = False
+    try:
+        with console.status("[dim]Carregando o motor de transcrição...[/]",
+                            spinner="dots") as status:
+            segments = _com_progresso(stt.transcribe_segments(str(path)),
+                                      status, secs)
+            for start, texto in transcript.paragraphs(segments):
+                paras.append((start, texto))
+                marca = f"[dim][{transcript.hms(start)}][/] " \
+                    if config.TRANSCRIBE_TIMESTAMPS else ""
+                console.print(f"{marca}{texto}")
+    except KeyboardInterrupt:
+        interrompido = True
+        console.print("\n[yellow](transcrição interrompida)[/]")
+    except RuntimeError as exc:      # dependência faltando
+        console.print(f"[yellow]{exc}[/]")
+        return
+    except Exception as exc:         # noqa: BLE001 — áudio ilegível, disco, etc.
+        console.print(f"[bold red]Erro ao transcrever:[/] {exc}")
+        return
+
+    if not paras:
+        console.print("[dim](nada foi transcrito — o áudio tem fala?)[/]")
+        return
+
+    if salvar:
+        try:
+            destino = transcript.save(paras, path, secs)
+            parcial = " [dim](parcial)[/]" if interrompido else ""
+            console.print(f"[cyan]Transcrição salva em[/] "
+                          f"[bright_white]{destino}[/]{parcial}")
+        except OSError as exc:
+            console.print(f"[bold red]Não consegui salvar:[/] {exc}")
+    elif not interrompido:
+        console.print("[dim](use --salvar para gravar em Markdown)[/]")
+
+
 def handle(raw: str, ctx: dict) -> bool:
     raw = raw.strip()
     if not raw.startswith("/"):
@@ -148,6 +262,10 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/stt":
         _handle_stt(arg, ctx)
+        return True
+
+    if cmd in {"/transcrever", "/transcricao"}:
+        _handle_transcrever(arg, ctx)
         return True
 
     if cmd == "/modelo":

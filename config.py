@@ -64,6 +64,20 @@ PARAKEET_LANGUAGE = "pt"
 RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
 RECORD_SAMPLERATE = 16000
 
+# --- Transcrição de arquivos (/transcrever) ---
+# Extensões reconhecidas como áudio/vídeo. Serve só para avisar quando o caminho
+# não parece mídia — o whisper decodifica via PyAV e aceita bem mais formatos.
+TRANSCRIBE_EXTENSIONS = (
+    ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".flac", ".aac", ".wma",
+    ".webm", ".mp4", ".mkv", ".mov",
+)
+TRANSCRIBE_PARAGRAPH_CHARS = 400  # tamanho mínimo de um parágrafo agrupado
+TRANSCRIBE_TIMESTAMPS = True      # prefixa cada parágrafo com [mm:ss]
+TRANSCRIBE_OUTPUT_DIR = None      # None → grava o .md ao lado do áudio
+# Acima desta duração o parakeet (sem VAD) degrada/trunca; o comando avisa e
+# sugere /stt whisper.
+TRANSCRIBE_PARAKEET_LIMIT = 30.0  # segundos
+
 # --- Voz / TTS ---
 # Raiz do projeto, para ancorar caminhos de modelos no projeto (não no cwd).
 PROJECT_ROOT = Path(__file__).resolve().parent

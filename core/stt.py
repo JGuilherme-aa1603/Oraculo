@@ -7,12 +7,19 @@ Motores (config.STT_ENGINE):
                 pontua/capitaliza sozinho. Limite de ~20-30s por clipe (sem VAD).
 
 O backend onnx-asr é genérico (cache por nome de modelo), reutilizável por outros
-modelos da mesma lib. A interface pública é transcribe(audio_path) -> str.
+modelos da mesma lib. A interface pública é transcribe(audio_path) -> str e
+transcribe_segments(audio_path) -> Iterator[Segment], esta última para arquivos
+longos (traz os tempos e sai aos poucos; ver core/transcript.py).
 Os modelos são carregados preguiçosamente na 1ª transcrição e cacheados em memória;
 os imports são preguiçosos para o modo texto nunca quebrar sem as dependências.
 """
 
+from collections.abc import Iterator
+
 import config
+
+# (início, fim, texto) em segundos a partir do começo do áudio.
+Segment = tuple[float, float, str]
 
 _whisper = None
 _onnx_models: dict = {}   # nome do modelo onnx-asr → instância carregada
@@ -80,9 +87,13 @@ def _get_whisper():
     return _whisper
 
 
-def _transcribe_whisper(audio_path: str) -> str:
-    """Transcreve com faster-whisper. VAD descarta trechos sem fala (evita
-    alucinação em silêncio); initial_prompt enviesa o domínio pt-BR."""
+def _segments_whisper(audio_path: str) -> Iterator[Segment]:
+    """Transcreve com faster-whisper, emitindo os segmentos conforme saem. VAD
+    descarta trechos sem fala (evita alucinação em silêncio); initial_prompt
+    enviesa o domínio pt-BR.
+
+    O gerador do faster-whisper é preguiçoso: quem consome recebe o texto aos
+    poucos, o que deixa arquivos longos acompanháveis (e interrompíveis)."""
     segments, _ = _get_whisper().transcribe(
         audio_path,
         language="pt",
@@ -92,7 +103,15 @@ def _transcribe_whisper(audio_path: str) -> str:
         initial_prompt=config.WHISPER_INITIAL_PROMPT,
         temperature=0.0,
     )
-    return " ".join(seg.text for seg in segments).strip()
+    for seg in segments:
+        text = seg.text.strip()
+        if text:
+            yield seg.start, seg.end, text
+
+
+def _transcribe_whisper(audio_path: str) -> str:
+    """Transcreve com faster-whisper, colando os segmentos num texto só."""
+    return " ".join(text for _, _, text in _segments_whisper(audio_path)).strip()
 
 
 # ----------------------------- onnx-asr (Parakeet) ---------------------------
@@ -129,17 +148,35 @@ def _transcribe_onnx_asr(audio_path: str, model_name: str, language: str | None)
 _MIN_DURATION = 0.25   # s — clipes mais curtos não têm fala
 
 
-def _too_short(audio_path: str) -> bool:
-    """True se o áudio é curto demais para conter fala. Evita lixo/erro de
-    divisão no pré-processador dos modelos onnx-asr (sem VAD) em gravações
-    acidentais (Enter sem falar)."""
+def duration(audio_path: str) -> float | None:
+    """Duração do áudio em segundos, ou None se não der para descobrir.
+
+    Tenta o soundfile (rápido, lê só o cabeçalho) e cai para o PyAV, que abre os
+    formatos comprimidos que o libsndfile não cobre (m4a, mp3, webm...)."""
     try:
         import soundfile as sf
 
         info = sf.info(audio_path)
-        return info.frames < _MIN_DURATION * info.samplerate
+        return info.frames / info.samplerate
     except Exception:  # noqa: BLE001
-        return False
+        pass
+    try:
+        import av
+
+        with av.open(audio_path) as container:
+            if container.duration:
+                return container.duration / 1_000_000
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _too_short(audio_path: str) -> bool:
+    """True se o áudio é curto demais para conter fala. Evita lixo/erro de
+    divisão no pré-processador dos modelos onnx-asr (sem VAD) em gravações
+    acidentais (Enter sem falar)."""
+    secs = duration(audio_path)
+    return secs is not None and secs < _MIN_DURATION
 
 
 def transcribe(audio_path: str) -> str:
@@ -150,6 +187,22 @@ def transcribe(audio_path: str) -> str:
         return _transcribe_onnx_asr(audio_path, config.PARAKEET_MODEL,
                                     config.PARAKEET_LANGUAGE)
     return _transcribe_whisper(audio_path)
+
+
+def transcribe_segments(audio_path: str) -> Iterator[Segment]:
+    """Transcreve um áudio devolvendo segmentos (início, fim, texto).
+
+    O whisper marca os tempos nativamente e sai aos poucos. O parakeet não
+    segmenta: devolve tudo num segmento só, cobrindo o arquivo inteiro."""
+    if _too_short(audio_path):
+        return
+    if config.STT_ENGINE == "parakeet":
+        text = _transcribe_onnx_asr(audio_path, config.PARAKEET_MODEL,
+                                    config.PARAKEET_LANGUAGE)
+        if text:
+            yield 0.0, duration(audio_path) or 0.0, text
+        return
+    yield from _segments_whisper(audio_path)
 
 
 def available() -> bool:

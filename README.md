@@ -78,6 +78,7 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/voz` — alterna entre modo voz e modo texto
 - `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
+- `/transcrever <arquivo> [--salvar]` — transcreve um arquivo de áudio
 - `/modelo` — lista os modelos do Ollama; `/modelo <nome>` troca o ativo
 - `/limpar` — apaga a memória da conversa atual
 - `/sair`, `/exit`, `/quit` — encerra o Oráculo
@@ -95,6 +96,20 @@ ele já está carregado e gerando.
 **Interromper a fala (barge-in):** no modo voz, pressione **Esc** para o Oráculo parar
 de falar na hora e liberar o prompt para a próxima mensagem — sem precisar esperar ele
 terminar de ler a resposta.
+
+**Transcrever arquivos:** `/transcrever <arquivo>` transcreve um áudio ou vídeo já
+gravado (ogg/opus do WhatsApp, mp3, m4a, wav, mp4...) usando o motor STT ativo. O
+caminho pode conter espaços e não precisa de aspas; `~` é expandido. O texto sai no
+terminal em parágrafos com timestamps, conforme é transcrito, e **Ctrl+C** interrompe
+sem sair do Oráculo. Com `--salvar` (ou `-s`), grava um `.md` com cabeçalho de metadados
+ao lado do áudio — ou em `TRANSCRIBE_OUTPUT_DIR`, se configurado.
+
+```
+/transcrever ~/Downloads/WhatsApp Ptt 2026-08-01 at 8.14.38 PM.ogg --salvar
+```
+
+Não é preciso converter o formato: o faster-whisper decodifica via PyAV. Para áudios
+longos use o `whisper` — o `parakeet` trunca acima de ~30s (o comando avisa).
 
 **Raciocínio (thinking):** modelos com a capacidade `thinking` (gemma4, qwen3...) podem
 raciocinar antes de responder. Ligue/desligue com `/think` (desligado por padrão, pois
@@ -115,6 +130,7 @@ oraculo/
 │   ├── commands.py  # Roteamento de comandos (/ajuda, /voz, /think, /modelo, ...)
 │   ├── history.py   # Persistência de sessões em JSON (~/.oraculo/sessions)
 │   ├── stt.py       # Whisper (faster-whisper) — áudio → texto
+│   ├── transcript.py# Transcrição de arquivos: parágrafos, Markdown, gravação
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
 │   ├── audio.py     # Captura de microfone + reprodução

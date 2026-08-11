@@ -190,12 +190,6 @@ tanto para o transcript quanto para a caixa de entrada em `_janela_entrada`):
 Também: é o **cursor** que puxa a rolagem. Mexer em `vertical_scroll` direto é desfeito,
 porque o Window recalcula o scroll a cada quadro para manter o cursor visível.
 
-Ao inspecionar o desenho num pty, **não** tire os ANSI do stream: o prompt_toolkit faz
-repaint posicional e o resultado parece corrompido mesmo estando certo. Reproduza o stream
-num emulador (`pyte`) e olhe a tela. E defina o tamanho do pty por `TIOCSWINSZ`: o
-prompt_toolkit lê o tamanho por ioctl, não por `$COLUMNS`, então sem isso ele desenha a 80
-colunas e o teste mede a largura errada.
-
 **Caixa de entrada (`core/prompt.py`).** `Application` inline do prompt_toolkit, não
 `PromptSession`: o prompt padrão não fecha a borda direita. A moldura arredondada é
 remontada à mão porque a classe `Border` do prompt_toolkit tem os cantos hard-coded. O
@@ -203,6 +197,30 @@ menu de completion entra no fluxo abaixo da barra de status — como `Float` ele
 desenhado por cima da borda, já que numa app não-fullscreen o float não escapa da altura
 da própria app. Atenção: `Buffer.cancel_completion()` **reverte** o texto ao original;
 para só fechar o menu preservando o que o Tab inseriu, zere `buf.complete_state`.
+
+## Como testar a interface
+
+Não dá para conferir o desenho a olho num pipe — a interface só existe com TTY. O método
+que funciona:
+
+1. Suba o app num pty (`pty.fork`) e **defina o tamanho por `TIOCSWINSZ`**. O
+   prompt_toolkit lê o tamanho por ioctl, não por `$COLUMNS`; sem isso ele desenha a 80
+   colunas e o teste mede a largura errada.
+2. Reproduza o stream num emulador de terminal e olhe a **tela**, não os bytes. `pyte`
+   serve bem: `screen.display` dá o texto e `screen.buffer[y][x]` dá os atributos — é
+   assim que se confere a seleção, que sai em vídeo reverso.
+3. **Nunca** tire os ANSI do stream para "ler melhor": o repaint é posicional e o
+   resultado parece corrompido mesmo estando certo. Isso já custou uma caçada a um bug
+   inexistente.
+4. Eventos de mouse entram no protocolo SGR: `\x1b[<{botão};{x};{y}M` (`m` solta,
+   botão `32` = arrasto).
+
+`pyte` é **só para teste** — não entra no `requirements.txt`. Instale à parte quando
+precisar: `.venv/bin/python -m pip install pyte`.
+
+Quando o comportamento não reproduz, **instrumente o handler** (escrever num arquivo
+temporário já basta) em vez de deduzir pelo código. As armadilhas do prompt_toolkit
+listadas acima só apareceram assim.
 
 ## Antes de finalizar qualquer mudança
 

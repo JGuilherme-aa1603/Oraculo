@@ -98,9 +98,15 @@ def _info(recent_sessions: list[dict]) -> list[Text]:
 
 
 def show_splash(model: str, recent_sessions: list[dict] | None = None,
-                memory_active: bool = True) -> None:
-    """Renderiza a splash de duas colunas."""
+                memory_active: bool = True, out: Console | None = None) -> None:
+    """Renderiza a splash de duas colunas.
+
+    `out` permite desenhar em outro Console — no modo tela cheia é o
+    TranscriptConsole, para a splash virar o primeiro bloco do transcript em vez
+    de ir para o stdout, que ali está sob controle do prompt_toolkit.
+    """
     recent_sessions = recent_sessions or []
+    out = out or console
 
     left = _identity(model, memory_active)
     right = _info(recent_sessions)
@@ -112,7 +118,12 @@ def show_splash(model: str, recent_sessions: list[dict] | None = None,
     left += [Text("")] * (height - len(left))
     right += [Text("")] * (height - len(right))
 
-    divider = _join([Text("│", style="cyan dim") for _ in range(height)])
+    # O respiro vertical vem de uma linha em branco DENTRO das colunas, não do
+    # padding do Panel: o padding fica fora do grid, então o divisor pararia
+    # antes das bordas e pareceria flutuar no meio da moldura.
+    left = [Text("")] + left + [Text("")]
+    right = [Text("")] + right + [Text("")]
+    divider = _join([Text("│", style="cyan dim") for _ in range(height + 2)])
 
     grid = Table.grid(expand=True, padding=(0, 2))
     # no_wrap + elipse: garante que nenhuma célula ganhe linhas extras por quebra
@@ -125,7 +136,7 @@ def show_splash(model: str, recent_sessions: list[dict] | None = None,
     title = Text.assemble((f"{config.ASSISTANT_NAME} ", "bold cyan"),
                           (f"v{config.APP_VERSION}", "white"))
 
-    console.print()
-    console.print(Panel(grid, title=title, title_align="left",
-                        border_style="cyan", box=box.SQUARE, padding=(1, 2)))
-    console.print()
+    out.print()
+    out.print(Panel(grid, title=title, title_align="left",
+                    border_style="cyan", box=box.ROUNDED, padding=(0, 2)))
+    out.print()

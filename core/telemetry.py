@@ -125,9 +125,9 @@ def log_turn(record: dict) -> None:
         pass
 
 
-def _print_summary(record: dict) -> None:
-    from rich.console import Console
-
+def summary_line(record: dict) -> str:
+    """Resumo compacto de um turno, em uma linha. Usado tanto pelo resumo de
+    console da telemetria quanto pelo rodapé do turno na interface."""
     parts = [f"turno {record['turn_s']:.1f}s"]
     if record.get("stt_s") is not None:
         parts.append(f"STT {record['stt_s']:.1f}s")
@@ -140,7 +140,13 @@ def _print_summary(record: dict) -> None:
         parts.append(tok)
     if record.get("ttfa_s") is not None:
         parts.append(f"1a fala {record['ttfa_s']:.1f}s")
-    Console().print("[dim cyan]telemetria[/] [dim]" + " · ".join(parts) + "[/]")
+    return " · ".join(parts)
+
+
+def _print_summary(record: dict) -> None:
+    from rich.console import Console
+
+    Console().print("[dim cyan]telemetria[/] [dim]" + summary_line(record) + "[/]")
 
 
 def _append_jsonl(record: dict) -> None:

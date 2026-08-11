@@ -85,6 +85,79 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/limpar` — apaga a memória da conversa atual
 - `/sair`, `/exit`, `/quit` — encerra o Oráculo
 
+A conversa é desenhada numa calha: a pergunta aparece recuada, a resposta abre com
+`● Oráculo` e o corpo fica alinhado numa coluna, com um rodapé discreto trazendo o
+tempo do turno e a taxa de tokens/s.
+
+### Modos de tela
+
+O Oráculo desenha de dois jeitos, escolhidos por `TUI_MODE` no `config.py`:
+
+| `TUI_MODE` | Comportamento |
+|---|---|
+| `"fullscreen"` (padrão) | Abre na tela alternativa do terminal (como `vim`/`htop`). A caixa de entrada fica **fixa no rodapé** e a conversa rola acima dela. Ao sair, o terminal volta como estava, sem rastro. |
+| `"inline"` | Desenha no buffer normal: a rolagem nativa do terminal vale, e o transcript permanece na tela depois de encerrar. `CLEAR_ON_START` limpa a tela no arranque. |
+
+No modo fullscreen a rolagem é da própria aplicação (a tela alternativa não tem
+scrollback do terminal):
+
+- **PgUp / PgDn** — sobe e desce uma página
+- **Ctrl+Home / Ctrl+End** — início e fim da conversa
+- **Roda do mouse** — rola o transcript (`TUI_SCROLL_LINES` ajusta a velocidade)
+
+Rolar para cima pausa o acompanhamento automático, para a resposta que continua
+chegando não arrastar a leitura de volta; voltar ao fim religa. Durante a geração a
+caixa não sai do lugar, e **Ctrl+C** corta a resposta sem encerrar a sessão.
+
+### Selecionar e copiar
+
+A seleção é da própria aplicação, então funciona com o mouse capturado — sem alternar
+nada:
+
+- **Arrastar** seleciona um trecho; arrastar contra a borda rola junto, então dá para
+  pegar um texto maior que a tela
+- **Duplo clique** seleciona a palavra; **triplo clique**, a linha
+- **Esc** limpa a seleção
+
+Selecionar pausa o acompanhamento automático, para o texto não escorregar sob o
+ponteiro. A barra de status avisa (**rolagem pausada**); Ctrl+End volta ao fim, e
+enviar uma mensagem nova também.
+
+O texto vai para a área de transferência assim que você solta o botão, e a barra de
+status confirma. Se houver `wl-copy`, `xclip` ou `xsel` instalado, a cópia usa a
+ferramenta; senão o Oráculo emite **OSC 52**, uma sequência que pede ao próprio
+terminal para copiar — não exige nada instalado, mas alguns terminais a desativam por
+padrão. Se a cópia não chegar ao clipboard, instale o `wl-clipboard`
+(`sudo pacman -S wl-clipboard` no Wayland) ou o `xclip` no X11.
+
+Como último recurso, **F2** solta o mouse e devolve a seleção nativa do terminal (a
+rolagem passa a ser só por PgUp/PgDn); F2 de novo recaptura. Para começar assim,
+`TUI_MOUSE = False` no `config.py`.
+
+Sem terminal interativo (pipe, redirecionamento) ou sem `prompt_toolkit`, o modo
+`inline` entra sozinho.
+
+**Caixa de entrada:** o texto é digitado numa caixa com borda, e abaixo dela uma barra
+mostra o modelo, o modo (texto/voz), o estado do thinking e a ocupação da memória.
+
+- **↑/↓** navegam o histórico, que persiste entre sessões (`~/.oraculo/input_history`)
+- **`/`** abre o autocomplete dos comandos; **Tab** escolhe, **Enter** envia
+- **Alt+Enter** quebra linha sem enviar (mensagens de várias linhas)
+- **Ctrl+D** encerra; **Ctrl+C** interrompe
+
+A caixa cresce até 8 linhas e depois rola. Para selecionar uma mensagem longa com o
+mouse, arraste contra a borda de cima ou de baixo: a caixa rola junto e a seleção
+acompanha até o começo (ou o fim) do texto. Com um trecho selecionado, digitar
+substitui e **Backspace**/**Delete** apagam, como em qualquer editor.
+
+`/tr` + Enter completa para `/transcrever` e espera o arquivo; comandos sem argumento
+(como `/limpar`) são enviados na hora. Com o autocomplete de caminhos, **Tab** completa
+o nome do arquivo a transcrever.
+
+Sem `prompt_toolkit` instalado, ou rodando sem terminal interativo (pipe, redirecionamento),
+a entrada cai automaticamente para o prompt simples do rich — nada deixa de funcionar.
+Para desligar a caixa de propósito, `INPUT_RICH_EDITOR = False` no `config.py`.
+
 No modo voz (push-to-talk), pressione Enter para começar a gravar e Enter de novo
 para parar; ou digite um texto e Enter como atalho. A transcrição usa o Whisper
 `large-v3` na GPU (quase em tempo real); a fala é sintetizada pelo Kokoro (voz feminina).
@@ -167,6 +240,9 @@ oraculo/
 │   ├── audio.py     # Captura de microfone + reprodução
 │   ├── keyboard.py  # Monitor de tecla no terminal (barge-in por Esc)
 │   ├── telemetry.py # Latência por estágio + tokens/s (opt-in)
+│   ├── ui.py        # Calha do transcript (eco, cabeçalho, corpo, rodapé)
+│   ├── prompt.py    # Caixa de entrada: borda, histórico e autocomplete
+│   ├── tui.py       # Modo tela cheia: transcript rolável + caixa fixa no rodapé
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── requirements.txt
 └── README.md
@@ -182,6 +258,11 @@ Ajuste `config.py` para trocar o modelo, parâmetros de geração (temperatura,
 modelo de STT (`STT_ENGINE`, `WHISPER_MODEL`), motor e voz de TTS (`TTS_ENGINE`,
 `KOKORO_VOICE`), o raciocínio padrão (`THINKING_DEFAULT`) e o modo padrão
 (`VOICE_MODE_DEFAULT`).
+
+A aparência do terminal fica no bloco **Interface do terminal**: `UI_MAX_WIDTH` (teto da
+coluna de leitura; `0` usa o terminal inteiro), `UI_GUTTER` (recuo do corpo), os glifos, a paleta,
+`UI_SHOW_TURN_METRICS` (rodapé com as métricas do turno), `CLEAR_ON_START` (limpar a
+tela ao abrir) e `INPUT_RICH_EDITOR`.
 
 ## Telemetria
 

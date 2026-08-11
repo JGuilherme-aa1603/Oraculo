@@ -5,6 +5,12 @@ langchain-ollama==1.1.0
 langchain-community==0.4.2
 rich==15.0.0
 
+# --- Interface do terminal ---
+# prompt_toolkit: caixa de entrada com borda, histórico entre sessões e
+# autocomplete dos /comandos (core/prompt.py). Pura Python, offline, sem binário.
+# Se faltar, o chat cai para o input simples do rich — nada deixa de funcionar.
+prompt_toolkit==3.0.53
+
 # --- Voz (Fase 2) ---
 # STT: faster-whisper (Whisper via CTranslate2). Padrão: large-v3 na GPU (ver
 #      bloco "STT na GPU" abaixo); cai automaticamente para CPU se faltar GPU.

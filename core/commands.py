@@ -13,7 +13,7 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 from pathlib import Path
 
 import config
-from core import llm as llm_mod
+from core import llm as llm_mod, ui
 
 STT_ENGINES = ("whisper", "parakeet")
 
@@ -21,16 +21,37 @@ STT_ENGINES = ("whisper", "parakeet")
 # Só entram aqui os que não dependem do LLM (ctx["chain"] é None nesse modo).
 STANDALONE_COMMANDS = {"/transcrever", "/transcricao", "/ajuda", "/help", "/?"}
 
-AJUDA_TEXT = """[bold cyan]Comandos disponíveis[/]
-  [bright_cyan]/ajuda[/]       mostra esta ajuda
-  [bright_cyan]/voz[/]         alterna entre modo voz e modo texto
-  [bright_cyan]/think[/]       liga/desliga o raciocínio (thinking); Ctrl+O mostra o texto
-  [bright_cyan]/stt[/]         lista motores de transcrição ou troca com [dim]/stt <motor>[/]
-  [bright_cyan]/transcrever[/] transcreve um arquivo de áudio
-                 [dim]/transcrever <arquivo> [--salvar][/]
-  [bright_cyan]/modelo[/]      lista modelos do Ollama ou troca com [dim]/modelo <nome>[/]
-  [bright_cyan]/limpar[/]      apaga a memória da conversa atual
-  [bright_cyan]/sair[/]        encerra o Oráculo"""
+# Fonte única da verdade dos comandos: alimenta tanto o texto de /ajuda quanto o
+# autocomplete da caixa de entrada (core/prompt.py). Ao adicionar um comando novo,
+# basta registrá-lo aqui — os dois lugares acompanham sozinhos.
+# (comando, dica de argumento, descrição de uma linha)
+COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("/ajuda", "", "mostra esta ajuda"),
+    ("/voz", "", "alterna entre modo voz e modo texto"),
+    ("/think", "", "liga/desliga o raciocínio; Ctrl+O mostra o texto"),
+    ("/stt", "<motor>", "lista ou troca o motor de transcrição"),
+    ("/transcrever", "<arquivo>", "transcreve um áudio; --salvar grava um .md ao lado"),
+    ("/modelo", "<nome>", "lista os modelos do Ollama ou troca o ativo"),
+    ("/limpar", "", "apaga a memória da conversa atual"),
+    ("/sair", "", "encerra o Oráculo"),
+)
+
+
+def _ajuda_text() -> str:
+    """Monta o texto de /ajuda em duas colunas alinhadas: 'comando <arg>' à
+    esquerda, descrição à direita. A largura vem do item mais longo."""
+    assinaturas = {cmd: f"{cmd} {arg}".strip() for cmd, arg, _ in COMMAND_SPECS}
+    largura = max(len(s) for s in assinaturas.values())
+    # O recuo de 2 alinha o bloco com o eco da mensagem no transcript (core.ui).
+    linhas = ["  [bold cyan]Comandos disponíveis[/]"]
+    for cmd, arg, desc in COMMAND_SPECS:
+        rotulo = f"[bright_cyan]{cmd}[/]" + (f" [dim]{arg}[/]" if arg else "")
+        preenche = " " * (largura - len(assinaturas[cmd]))
+        linhas.append(f"    {rotulo}{preenche}  {desc}")
+    return "\n".join(linhas)
+
+
+AJUDA_TEXT = _ajuda_text()
 
 
 def _list_models() -> list[str]:
@@ -54,22 +75,22 @@ def _handle_modelo(arg: str, ctx: dict) -> None:
         if not models:
             console.print("[yellow]Não consegui listar os modelos do Ollama.[/]")
             return
-        console.print("[bold cyan]Modelos disponíveis:[/]")
+        console.print("  [bold cyan]Modelos disponíveis:[/]")
         for m in models:
             mark = "  [bright_white](atual)[/]" if m == chain.model_name else ""
-            console.print(f"  • [bright_white]{m}[/]{mark}")
-        console.print("[dim]Use /modelo <nome> para trocar.[/]")
+            console.print(f"    • [bright_white]{m}[/]{mark}")
+        console.print("  [dim]Use /modelo <nome> para trocar.[/]")
         return
 
     chain.set_model(arg)
-    console.print(f"[cyan]Modelo trocado para[/] [bright_white]{arg}[/].")
+    ui.notice(console, f"Modelo trocado para {arg}.", style="cyan")
 
     # set_model preserva o reasoning; se o novo modelo não suporta thinking,
     # desliga para o próximo turno não falhar com erro 400.
     if ctx.get("thinking") and not llm_mod.supports_thinking(arg):
         ctx["thinking"] = False
         chain.set_thinking(False)
-        console.print(f"[yellow]{arg} não suporta raciocínio — thinking desativado.[/]")
+        ui.warn(console, f"{arg} não suporta raciocínio — thinking desativado.")
 
 
 def _handle_think(ctx: dict) -> None:
@@ -78,19 +99,16 @@ def _handle_think(ctx: dict) -> None:
     want = not ctx.get("thinking", False)
 
     if want and not llm_mod.supports_thinking(chain.model_name):
-        console.print(
-            f"[yellow]O modelo [bright_white]{chain.model_name}[/] não suporta "
-            f"raciocínio (thinking).[/]"
-        )
+        ui.warn(console, f"O modelo {chain.model_name} não suporta raciocínio (thinking).")
         return
 
     ctx["thinking"] = want
     chain.set_thinking(want)
     if want:
-        console.print("[cyan]Raciocínio (thinking) ativado.[/] "
-                      "[dim]Durante a resposta, Ctrl+O mostra/oculta o texto.[/]")
+        ui.notice(console, "Raciocínio ativado — Ctrl+O mostra/oculta o texto.",
+                  style="cyan")
     else:
-        console.print("[cyan]Raciocínio (thinking) desativado.[/]")
+        ui.notice(console, "Raciocínio (thinking) desativado.", style="cyan")
 
 
 def _handle_stt(arg: str, ctx: dict) -> None:
@@ -98,16 +116,16 @@ def _handle_stt(arg: str, ctx: dict) -> None:
     arg = arg.lower()
 
     if not arg:
-        console.print("[bold cyan]Motores de transcrição (STT):[/]")
+        console.print("  [bold cyan]Motores de transcrição (STT):[/]")
         for engine in STT_ENGINES:
             mark = "  [bright_white](atual)[/]" if engine == config.STT_ENGINE else ""
-            console.print(f"  • [bright_white]{engine}[/]{mark}")
-        console.print("[dim]Use /stt <motor> para trocar.[/]")
+            console.print(f"    • [bright_white]{engine}[/]{mark}")
+        console.print("  [dim]Use /stt <motor> para trocar.[/]")
         return
 
     if arg not in STT_ENGINES:
-        console.print(f"[yellow]Motor desconhecido:[/] {arg}  "
-                      f"[dim](opções: {', '.join(STT_ENGINES)})[/]")
+        ui.warn(console, f"Motor desconhecido: {arg} "
+                f"(opções: {', '.join(STT_ENGINES)})")
         return
 
     # transcribe() lê config.STT_ENGINE a cada chamada, então sobrescrever aqui
@@ -115,10 +133,10 @@ def _handle_stt(arg: str, ctx: dict) -> None:
     from core import stt
 
     config.STT_ENGINE = arg
-    console.print(f"[cyan]Motor de STT trocado para[/] [bright_white]{arg}[/].")
+    ui.notice(console, f"Motor de STT trocado para {arg}.", style="cyan")
     if not stt.available():
-        console.print(f"[yellow]Atenção: dependências de '{arg}' não instaladas — "
-                      f"a transcrição vai falhar até instalá-las.[/]")
+        ui.warn(console, f"Dependências de '{arg}' não instaladas — a transcrição "
+                f"vai falhar até instalá-las.")
 
 
 _SAVE_FLAGS = {"--salvar", "-s"}
@@ -242,7 +260,7 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd in config.EXIT_COMMANDS:
         ctx["running"] = False
-        console.print("[cyan]Encerrando...[/]")
+        ui.notice(console, "Encerrando...", style="cyan")
         return True
 
     if cmd in {"/ajuda", "/help", "/?"}:
@@ -251,13 +269,13 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/limpar":
         ctx["chain"].memory.clear()
-        console.print("[cyan]Memória da sessão limpa.[/]")
+        ui.notice(console, "Memória da sessão limpa.", style="cyan")
         return True
 
     if cmd == "/voz":
         ctx["voice_mode"] = not ctx["voice_mode"]
         estado = "ativado" if ctx["voice_mode"] else "desativado"
-        console.print(f"[cyan]Modo voz {estado}.[/]")
+        ui.notice(console, f"Modo voz {estado}.", style="cyan")
         return True
 
     if cmd == "/think":
@@ -276,5 +294,5 @@ def handle(raw: str, ctx: dict) -> bool:
         _handle_modelo(arg, ctx)
         return True
 
-    console.print(f"[yellow]Comando desconhecido:[/] {cmd}  [dim](veja /ajuda)[/]")
+    ui.warn(console, f"Comando desconhecido: {cmd}  (veja /ajuda)")
     return True

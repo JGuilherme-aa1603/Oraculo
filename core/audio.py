@@ -32,11 +32,16 @@ def record(duration: float = config.RECORD_DURATION,
 
 
 def record_ptt(samplerate: int = config.RECORD_SAMPLERATE,
-               path: str = "/tmp/oraculo_in.wav") -> str:
-    """Push-to-talk: grava até o usuário pressionar Enter (sem duração fixa).
+               path: str = "/tmp/oraculo_in.wav",
+               wait_stop=None) -> str:
+    """Push-to-talk: grava até o usuário sinalizar o fim (sem duração fixa).
 
-    O chamador deve avisar o usuário antes ("Enter para parar"). Bloqueia em
-    input() enquanto captura o áudio do microfone em background.
+    O chamador deve avisar o usuário antes ("Enter para parar").
+
+    `wait_stop` é a função que bloqueia até esse sinal chegar. O padrão é
+    `input()`, que serve no modo inline. No modo tela cheia o stdin pertence ao
+    prompt_toolkit — ler dali brigaria com ele —, então o chamador passa uma
+    função que espera o Enter vindo da caixa de entrada.
     """
     try:
         import numpy as np
@@ -56,7 +61,7 @@ def record_ptt(samplerate: int = config.RECORD_SAMPLERATE,
 
     try:
         with sd.InputStream(samplerate=samplerate, channels=1, callback=callback):
-            input()  # bloqueia até Enter → encerra a gravação
+            (wait_stop or input)()   # bloqueia até o sinal → encerra a gravação
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Falha ao acessar o microfone: {exc}") from exc
 

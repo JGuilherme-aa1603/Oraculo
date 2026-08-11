@@ -25,8 +25,11 @@ from core import (
     history as history_mod,
     keyboard,
     llm as llm_mod,
+    prompt as prompt_mod,
     speaker as speaker_mod,
     telemetry,
+    tui,
+    ui,
 )
 from core.chain import OraculoChain
 from core.splash import show_splash
@@ -122,7 +125,7 @@ def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exceptio
     devolve o controle para a próxima mensagem. Sem TTY, só aguarda o fim."""
     con = ctx["console"]
     if sys.stdin.isatty() and not ctx.get("esc_hint_shown"):
-        con.print("[dim](Esc interrompe a fala)[/]")
+        ui.notice(con, "Esc interrompe a fala")
         ctx["esc_hint_shown"] = True
 
     interrupted = threading.Event()
@@ -134,41 +137,56 @@ def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exceptio
     with keyboard.watch_key(keyboard.ESC, _on_esc):
         err = speaker.close()
     if interrupted.is_set():
-        con.print("[dim](fala interrompida)[/]")
+        ui.notice(con, "fala interrompida")
     return err
 
 
-def _listen(ctx: dict) -> str | None:
+def _status(ctx: dict) -> dict:
+    """Estado exibido na barra abaixo da caixa de entrada. Recalculado a cada
+    repaint, então acompanha /modelo, /voz e /think sem precisar de callback."""
+    chain = ctx.get("chain")
+    flags = ["voz" if ctx.get("voice_mode") else "texto"]
+    flags.append("think on" if ctx.get("thinking") else "think off")
+    if chain is not None:
+        # Memória em pares (pergunta+resposta), que é como a janela é cortada.
+        with contextlib.suppress(Exception):
+            mem = chain.memory
+            flags.append(f"mem {len(mem.messages) // 2}/{mem.max_messages // 2}")
+    return {
+        "model": chain.model_name if chain is not None else config.OLLAMA_MODEL,
+        "flags": flags,
+    }
+
+
+def _listen(ctx: dict, ask, wait_stop=None) -> str | None:
     """Captura uma fala no modo voz (push-to-talk). Primeiro Enter inicia a
     gravação, segundo Enter encerra; texto digitado é usado diretamente como
     escape. Retorna o texto ou None se nada foi captado."""
     from core import audio, stt
 
+    console = ctx["console"]
     ctx["last_stt_seconds"] = None
-    typed = console.input(
-        "[dim][voz] Enter para começar a gravar (ou digite e Enter):[/] "
-    ).strip()
+    typed = ask("[dim][voz] Enter para gravar (ou digite e Enter):[/] ")
     if typed:
         return typed
 
     try:
-        console.print("[dim](gravando... Enter para parar)[/]")
-        path = audio.record_ptt()
-        console.print("[dim](transcrevendo...)[/]")
+        ui.notice(console, "gravando... Enter para parar")
+        path = audio.record_ptt(wait_stop=wait_stop)
+        ui.notice(console, "transcrevendo...")
         _stt_t0 = time.monotonic()
         text = stt.transcribe(path)
         ctx["last_stt_seconds"] = time.monotonic() - _stt_t0
     except RuntimeError as exc:
-        console.print(f"[yellow]{exc}[/]")
-        console.print("[yellow]Voltando ao modo texto.[/]")
+        ui.warn(console, str(exc))
+        ui.warn(console, "Voltando ao modo texto.")
         ctx["voice_mode"] = False
         return None
 
     if not text:
-        console.print("[dim](não entendi nada — tente de novo)[/]")
+        ui.notice(console, "não entendi nada — tente de novo")
         return None
 
-    console.print(f"[dim](você disse: {text})[/]")
     return text
 
 
@@ -207,6 +225,8 @@ def run_standalone(argv: list[str]) -> int:
 
 
 def main() -> None:
+    # O modelo é instanciado antes de limpar a tela: se o Ollama estiver fora do
+    # ar, a mensagem de erro fica visível em vez de ser apagada logo em seguida.
     try:
         chain = OraculoChain()
     except Exception as exc:  # noqa: BLE001
@@ -216,11 +236,15 @@ def main() -> None:
         )
         sys.exit(1)
 
-    show_splash(chain.model_name, recent_sessions=history_mod.load_recent())
+    if tui.disponivel():
+        _run_fullscreen(chain)
+    else:
+        _run_inline(chain)
 
-    history = history_mod.SessionHistory()
+
+def _novo_ctx(chain: OraculoChain, out) -> dict:
     ctx = {
-        "console": console,
+        "console": out,
         "chain": chain,
         "running": True,
         "voice_mode": config.VOICE_MODE_DEFAULT,
@@ -231,28 +255,95 @@ def main() -> None:
     if config.THINKING_DEFAULT and llm_mod.supports_thinking(chain.model_name):
         ctx["thinking"] = True
         chain.set_thinking(True)
+    return ctx
+
+
+def _run_inline(chain: OraculoChain) -> None:
+    """Modo clássico: desenha no buffer normal, rolagem nativa do terminal."""
+    ui.clear_screen(console)
+    show_splash(chain.model_name, recent_sessions=history_mod.load_recent())
+    ctx = _novo_ctx(chain, console)
+    box = prompt_mod.InputBox(console, lambda: _status(ctx))
+
+    def _live():
+        return Live(console=console, refresh_per_second=6, transient=True,
+                    vertical_overflow="crop")
+
+    def _watch_ctrl_o(toggle):
+        # Modo raw só no inline: no fullscreen o prompt_toolkit é dono do teclado.
+        if ctx.get("thinking") and sys.stdin.isatty():
+            return keyboard.watch_key(keyboard.CTRL_O, toggle,
+                                      once=False, preserve_signals=True)
+        return contextlib.nullcontext()
+
+    _chat_loop(chain, ctx, ask=lambda p="": box.ask(p), live_factory=_live,
+               echo=box.rich, watch_ctrl_o=_watch_ctrl_o)
+
+
+def _run_fullscreen(chain: OraculoChain) -> None:
+    """Modo tela cheia: tela alternativa, caixa fixa e rolagem própria."""
+    ctx: dict = {"chain": chain, "voice_mode": config.VOICE_MODE_DEFAULT,
+                 "thinking": False, "running": True}
+
+    def loop(sessao) -> None:
+        # O ctx é preenchido aqui porque só agora existe o console do transcript;
+        # a barra de status já pode ter sido desenhada com os valores iniciais.
+        ctx.update(_novo_ctx(chain, sessao.console))
+        sessao.on_toggle_thinking = lambda: ctx.update(
+            show_thinking=not ctx.get("show_thinking", False))
+        show_splash(chain.model_name, recent_sessions=history_mod.load_recent(),
+                    out=sessao.console)
+
+        def _ask(_prompt: str = "") -> str:
+            return sessao.ask()
+
+        _chat_loop(chain, ctx, ask=_ask, live_factory=sessao.live, echo=True,
+                   watch_ctrl_o=lambda _toggle: contextlib.nullcontext(),
+                   interrupt=sessao.interromper, wait_stop=sessao.wait_enter)
+
+    tui.run(loop, lambda: _status(ctx))
+
+
+def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
+               watch_ctrl_o, interrupt=None, wait_stop=None) -> None:
+    """Laço de turnos, compartilhado pelos dois modos de desenho.
+
+    O que muda entre eles é injetado: de onde vem a mensagem (`ask`), o que
+    mostra o preview do streaming (`live_factory`), como o Ctrl+O é observado e
+    como a interrupção chega (`interrupt`, um Event no modo tela cheia — lá o
+    KeyboardInterrupt não sobe pela thread do laço).
+    """
+    console = ctx["console"]
+    history = history_mod.SessionHistory()
 
     while ctx["running"]:
         try:
             if ctx["voice_mode"]:
-                user_input = _listen(ctx)
+                user_input = _listen(ctx, ask, wait_stop=wait_stop)
                 if not user_input:
                     continue
             else:
-                user_input = console.input("[bold cyan]Você:[/] ").strip()
+                user_input = ask()
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[cyan]Encerrando...[/]")
+            ui.notice(console, "Encerrando...", style="cyan")
             break
 
         if not user_input:
             continue
 
+        # A caixa se apaga ao enviar, então o transcript precisa do eco para
+        # guardar a pergunta. No fallback do rich o texto digitado já ficou na
+        # tela — ecoar de novo duplicaria.
+        if echo:
+            ui.user_echo(console, user_input)
+
         if commands.handle(user_input, ctx):
+            ui.spacer(console)
             continue
 
         history.record("user", user_input)
         stt_seconds = ctx.pop("last_stt_seconds", None)
-        console.print(f"[bold bright_cyan]{config.ASSISTANT_NAME}:[/]")
+        ui.assistant_header(console)
         # No modo voz, a fala é sintetizada frase a frase JÁ DURANTE a geração,
         # sobreposta à escrita — não espera a resposta inteira terminar.
         speaker = speaker_mod.StreamSpeaker() if ctx["voice_mode"] else None
@@ -278,22 +369,14 @@ def main() -> None:
             def _toggle_thinking() -> None:
                 ctx["show_thinking"] = not ctx.get("show_thinking", False)
 
-            # Ctrl+O alterna a exibição do raciocínio ao vivo. Só observa o
-            # teclado quando o thinking está ligado; cbreak preserva o Ctrl+C,
-            # que continua interrompendo a resposta.
-            if ctx.get("thinking") and sys.stdin.isatty():
-                key_watch = keyboard.watch_key(
-                    keyboard.CTRL_O, _toggle_thinking,
-                    once=False, preserve_signals=True,
-                )
-            else:
-                key_watch = contextlib.nullcontext()
-
-            with Live(console=console, refresh_per_second=6, transient=True,
-                      vertical_overflow="crop") as live, key_watch:
+            with live_factory() as live, watch_ctrl_o(_toggle_thinking):
                 status = _ThinkingStatus(live, chain.model_name, ctx.get("thinking", False))
                 status.start()
                 for kind, text in chain.stream(user_input):
+                    # No modo tela cheia o Ctrl+C não sobe como exceção nesta
+                    # thread: ele marca o Event, e a checagem é aqui.
+                    if interrupt is not None and interrupt.is_set():
+                        raise KeyboardInterrupt
                     now = time.monotonic()
                     if not got_output:
                         got_output = True
@@ -302,8 +385,8 @@ def main() -> None:
                     if kind == "think":
                         reasoning.append(text)
                         if now - last_render >= _REFRESH_INTERVAL:
-                            live.update(_thinking_view(
-                                ctx.get("show_thinking"), "".join(reasoning)))
+                            live.update(ui.indent(_thinking_view(
+                                ctx.get("show_thinking"), "".join(reasoning))))
                             last_render = now
                         continue
                     # resposta
@@ -314,28 +397,32 @@ def main() -> None:
                     if speaker:
                         speaker.feed(text)
                     if now - last_render >= _REFRESH_INTERVAL:
-                        live.update(Markdown("".join(chunks)))
+                        live.update(ui.indent(Markdown("".join(chunks))))
                         last_render = now
             response = "".join(chunks)
-            console.print(Markdown(response))
+            ui.body(console, Markdown(response))
             history.record("assistant", response)
             tel.set_llm(**chain.last_usage)
         except KeyboardInterrupt:
-            console.print("\n[yellow](resposta interrompida)[/]")
+            ui.warn(console, "resposta interrompida")
         except Exception as exc:  # noqa: BLE001
-            console.print(f"\n[bold red]Erro ao responder:[/] {exc}")
+            ui.error(console, f"Erro ao responder: {exc}")
         finally:
             if speaker:
                 err = _speak_until_done(speaker, ctx)
                 if err:
-                    console.print(f"[yellow](voz indisponível: {err})[/]")
+                    ui.warn(console, f"voz indisponível: {err}")
                 tel.mark_at("first_audio", speaker.first_audio_at)
             # Telemetria nunca quebra o turno: tudo em try/except próprio.
             try:
                 tel.set_stage("stt", stt_seconds)
-                telemetry.log_turn(tel.finish())
+                record = tel.finish()
+                if config.UI_SHOW_TURN_METRICS:
+                    ui.turn_footer(console, telemetry.summary_line(record))
+                telemetry.log_turn(record)
             except Exception:  # noqa: BLE001
                 pass
+            ui.spacer(console)
 
 
 if __name__ == "__main__":

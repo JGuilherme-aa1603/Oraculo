@@ -117,6 +117,55 @@ TELEMETRY_DIR = DATA_DIR / "telemetry"
 # --- Rótulo de hardware exibido na splash (informativo) ---
 DEVICE_LABEL = "CUDA RTX 4060"
 
+# --- Interface do terminal ---
+# Largura máxima da coluna de leitura, em colunas. 0 = sem limite (usa o terminal
+# inteiro). Um teto entre 90 e 110 deixa a linha mais confortável de ler em monitor
+# largo, ao custo de deixar espaço vazio à direita.
+UI_MAX_WIDTH = 0
+UI_GUTTER = 5                   # recuo do corpo da resposta (alinha sob o nome)
+UI_GLYPH_ASSISTANT = "●"        # marca o início de um turno do Oráculo
+UI_GLYPH_USER = ">"             # eco da mensagem enviada
+UI_GLYPH_NOTICE = "⎿"           # avisos/resultados subordinados ao turno
+
+# Paleta (nomes de cor do rich; a barra de status traduz para prompt_toolkit)
+UI_COLOR_ACCENT = "bright_cyan"  # Oráculo, glifos ativos
+UI_COLOR_USER = "cyan"           # eco do usuário
+UI_COLOR_DIM = "grey42"          # métricas, rodapés
+UI_COLOR_FAINT = "grey30"        # dicas de tecla
+
+# Rodapé por turno com as métricas da telemetria (latência, tokens/s). Independe
+# de TELEMETRY_ENABLED: aqui é só exibição, nada é gravado em disco.
+UI_SHOW_TURN_METRICS = True
+
+# Modo de desenho da interface:
+#   "fullscreen" — tela alternativa do terminal (como vim/htop e como o Claude
+#                  Code desenha por padrão): caixa de entrada fixa no rodapé,
+#                  transcript com rolagem própria (PgUp/PgDn/Home/End e roda do
+#                  mouse) e, ao sair, o terminal volta como estava.
+#   "inline"     — desenha no buffer normal, rolagem nativa do terminal e o
+#                  transcript permanece na tela depois de encerrar.
+# Sem TTY ou sem prompt_toolkit, cai para "inline" automaticamente.
+TUI_MODE = "fullscreen"
+
+# Só vale no modo "inline": limpa a tela visível ao abrir (preserva o scrollback
+# anterior — nunca usar 3J aqui, destruiria o histórico do terminal de quem chamou).
+CLEAR_ON_START = True
+
+# Linhas roladas por evento da roda do mouse no modo fullscreen.
+TUI_SCROLL_LINES = 3
+
+# Captura do mouse no modo fullscreen. Ligada, a roda rola o transcript; desligada,
+# o terminal volta a tratar o mouse e a seleção com o botão esquerdo funciona
+# normalmente (a rolagem fica por conta de PgUp/PgDn). Alternável em tempo real
+# com F2 — não é preciso reiniciar para copiar um trecho.
+TUI_MOUSE = True
+
+# Entrada: caixa com borda, histórico entre sessões e autocomplete dos /comandos.
+# Requer prompt_toolkit; sem ele (ou sem TTY) cai para um prompt simples do rich.
+INPUT_RICH_EDITOR = True
+INPUT_HISTORY_FILE = DATA_DIR / "input_history"
+INPUT_HISTORY_MAX = 500
+
 # --- System Prompt ---
 SYSTEM_PROMPT = """Você é o Oráculo, um assistente pessoal local rodando 100% offline.
 Você é direto, útil e responde sempre em português brasileiro.

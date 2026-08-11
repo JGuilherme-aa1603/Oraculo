@@ -62,6 +62,9 @@ oraculo/
     ├── audio.py     # captura de microfone + reprodução
     ├── keyboard.py  # monitor de tecla no terminal (Esc = barge-in, Ctrl+O = thinking)
     ├── telemetry.py # latência por estágio + tokens/s (opt-in, custo zero desligada)
+    ├── ui.py        # calha do transcript: eco, cabeçalho, corpo recuado, rodapé
+    ├── prompt.py    # caixa de entrada (prompt_toolkit): borda, histórico, autocomplete
+    ├── tui.py       # modo tela cheia: transcript rolável + caixa fixa no rodapé
     └── splash.py    # splash screen de duas colunas (rich)
 ```
 
@@ -102,6 +105,104 @@ Quando os comandos de sistema forem implementados:
 - Layout da splash: duas colunas estilo Claude Code — identidade à esquerda (símbolo `◈ ⟁ ◈`, modelo, memória, path), comandos + conversas recentes à direita.
 - Biblioteca: `rich`. Usar `Table.grid` para o layout de colunas.
 - Sem emoji no código de produção (a não ser que já esteja estabelecido na UI).
+
+**Calha do transcript (`core/ui.py`).** Todo turno segue a mesma estrutura vertical: eco
+da pergunta recuado 2, cabeçalho `● Oráculo`, corpo recuado `UI_GUTTER`, rodapé com as
+métricas, linha em branco. Saída nova no terminal passa por `ui.notice/warn/error` em vez
+de `console.print` cru — é isso que mantém tudo na mesma margem. Blocos de lista (`/stt`,
+`/modelo`) indentam manualmente para casar com a calha.
+
+- Nada de painel por mensagem: a moldura custa 4 colunas por mensagem e vira ruído em
+  resposta longa com código. O recuo dá a mesma hierarquia de graça.
+- A largura de leitura é limitada por `UI_MAX_WIDTH` (`Constrain` do rich). Terminal largo
+  com texto de ponta a ponta é ilegível.
+- O preview do `Live` durante o streaming usa **o mesmo** `ui.indent()` da renderização
+  final — sem isso o texto pula de coluna quando o preview é substituído.
+
+**Dois modos de desenho (`TUI_MODE`).** É o mesmo par que o Claude Code oferece:
+
+- `"fullscreen"` (padrão, `core/tui.py`) — tela alternativa do terminal, caixa fixa no
+  rodapé, transcript com rolagem própria, saída sem rastro.
+- `"inline"` (`core/ui.py` + `core/prompt.py`) — buffer normal, rolagem nativa do
+  terminal, transcript permanece na tela ao encerrar. `CLEAR_ON_START` limpa no arranque
+  usando só `2J`; nunca usar `3J`, que destruiria o scrollback de quem chamou.
+
+Sem TTY ou sem prompt_toolkit, cai para `inline` sozinho.
+
+**Como a rolagem existe na tela alternativa.** Ela não vem do terminal — lá não há
+scrollback. Vem do `Transcript`: a conversa é uma lista de blocos em memória e, a cada
+quadro, só as linhas visíveis viram fragmentos. Mesma estratégia do vim. Pontos que
+custaram para acertar:
+
+- `TranscriptConsole` é um `rich.Console` que guarda o que foi impresso em vez de escrever
+  no stdout. **É o que faz `core/ui.py` e `core/commands.py` funcionarem nos dois modos sem
+  alteração** — para eles, continua sendo um Console comum. Ao adicionar saída nova, use
+  `console.print`/`ui.*` e ela aparece nos dois modos de graça.
+- Guardar os *argumentos* do `print` (não o texto renderizado) é o que permite reflowar
+  tudo quando o terminal muda de largura.
+- `FormattedTextControl.create_content` também é chamado com `height=None`, só para
+  perguntar a altura preferida. Mexer no viewport nessa passada estoura.
+- A caixa precisa de `dont_extend_height=True`: senão o `HSplit` entrega a sobra vertical
+  para ela (aceita até 8 linhas) e ela abre linhas em branco no lugar do transcript.
+- No fullscreen o Ctrl+C **não** sobe como exceção na thread do laço — ele marca um
+  `Event` que o laço confere a cada chunk do stream.
+- `core/keyboard.py` (modo raw) só vale no inline. No fullscreen o prompt_toolkit é dono
+  do teclado, então Ctrl+O é só mais um atalho da app. Pelo mesmo motivo `audio.record_ptt`
+  recebe `wait_stop`: o `input()` dele brigaria pelo stdin.
+
+- Capturar o mouse tira do terminal a seleção de texto. A saída **não** é soltar a captura,
+  é implementar a seleção — que é o que o Claude Code faz. O `Selecao` guarda âncora e
+  cursor em **linha absoluta do transcript**, não em posição de tela: assim o trecho
+  selecionado continua no mesmo texto quando a conversa rola ou cresce durante a geração.
+  O destaque sai em vídeo reverso, cortando os fragmentos nos limites da seleção.
+  F2 (soltar a captura) sobra como escape hatch para quando o OSC 52 não passa.
+- Cópia sem dependência: `wl-copy`/`xclip`/`xsel` se existirem, senão **OSC 52** (pede ao
+  terminal para copiar). Subprocess sempre por lista de argumentos, nunca `shell=True`, e
+  **numa thread**: a cópia é disparada de dentro do tratamento do mouse, que roda na
+  thread que desenha — um utilitário lento ali congelaria a interface inteira.
+- Arrasto que sai da área do transcript exige duas defesas, senão a seleção *trava*:
+  (1) enquanto `selecao.arrastando`, o container raiz reivindica a tela toda em
+  `write_to_screen`, porque o prompt_toolkit entrega o evento ao controle sob o ponteiro;
+  (2) movimento **sem botão** durante um arrasto significa que o soltar aconteceu fora da
+  janela e o terminal não o reportou — sem essa recuperação a seleção fica presa em modo
+  de arrasto para sempre.
+- Rolar para cima (inclusive por arrasto) pausa o auto-follow. Enviar mensagem **tem** que
+  voltar ao fim, senão a resposta chega fora da vista e a interface parece travada. O
+  estado pausado precisa ficar visível na barra pelo mesmo motivo.
+- Ao ligar Esc a alguma ação, **não** use `eager=True`: Alt+Enter chega como
+  `("escape", "enter")` e um Esc ansioso engole o prefixo, matando a quebra de linha.
+
+**Arrasto de mouse no prompt_toolkit — três armadilhas** (todas custaram tempo, e valem
+tanto para o transcript quanto para a caixa de entrada em `_janela_entrada`):
+
+1. O `Window` traduz a posição da tela para posição no documento e **prende ao último
+   visível** (`y = min(max_y, y)`). Para rolar ao arrastar contra a borda é preciso
+   interceptar o handler **antes** dessa tradução, usando coordenadas de tela.
+2. `screen.width`/`screen.height` são **sempre 0** dentro de `write_to_screen` — o
+   renderer nunca os atribui. Para reivindicar a tela inteira use
+   `get_app().output.get_size()`, senão a faixa sai vazia e nada é registrado.
+3. `top_visible`/`bottom_visible` e `get_cursor_up_position()` raciocinam em linhas do
+   **documento**. Uma mensagem digitada sem quebras é uma linha só: a primeira está
+   "sempre visível" e "subir uma linha" não sai do lugar. Para conteúdo com `wrap_lines`
+   ande por linha *visual* (a largura da janela em caracteres) e deixe o cursor, preso
+   aos extremos do texto, ser o limite.
+
+Também: é o **cursor** que puxa a rolagem. Mexer em `vertical_scroll` direto é desfeito,
+porque o Window recalcula o scroll a cada quadro para manter o cursor visível.
+
+Ao inspecionar o desenho num pty, **não** tire os ANSI do stream: o prompt_toolkit faz
+repaint posicional e o resultado parece corrompido mesmo estando certo. Reproduza o stream
+num emulador (`pyte`) e olhe a tela. E defina o tamanho do pty por `TIOCSWINSZ`: o
+prompt_toolkit lê o tamanho por ioctl, não por `$COLUMNS`, então sem isso ele desenha a 80
+colunas e o teste mede a largura errada.
+
+**Caixa de entrada (`core/prompt.py`).** `Application` inline do prompt_toolkit, não
+`PromptSession`: o prompt padrão não fecha a borda direita. A moldura arredondada é
+remontada à mão porque a classe `Border` do prompt_toolkit tem os cantos hard-coded. O
+menu de completion entra no fluxo abaixo da barra de status — como `Float` ele seria
+desenhado por cima da borda, já que numa app não-fullscreen o float não escapa da altura
+da própria app. Atenção: `Buffer.cancel_completion()` **reverte** o texto ao original;
+para só fechar o menu preservando o que o Tab inseriu, zere `buf.complete_state`.
 
 ## Antes de finalizar qualquer mudança
 

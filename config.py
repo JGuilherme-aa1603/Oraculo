@@ -33,7 +33,9 @@ MAX_HISTORY_MESSAGES = 20  # Mantém as últimas N mensagens (sempre cortando em
 STT_ENGINE = "whisper"          # whisper | parakeet
 # whisper:  faster-whisper, VAD embutido, fallback CUDA→CPU. Bom p/ clipes longos.
 # parakeet: NVIDIA Parakeet TDT 0.6b v3 (onnx-asr). Muito rápido na CPU e pontua
-#           sozinho, mas tem limite de ~20-30s por clipe (sem VAD; ver Fase 3).
+#           sozinho, mas tem limite de ~20-30s por clipe. Na conversa isso não
+#           incomoda (o VAD recorta a fala e VAD_MAX_SECONDS a limita); em
+#           /transcrever de arquivo longo, degrada — prefira o whisper.
 
 # Whisper (faster-whisper) — backend padrão.
 WHISPER_MODEL = "large-v3"          # base | small | medium | large-v3 (maior = mais preciso)
@@ -63,6 +65,67 @@ PARAKEET_LANGUAGE = "pt"
 
 RECORD_DURATION = 5.0           # segundos (modo gravação fixa)
 RECORD_SAMPLERATE = 16000
+# Dispositivo de entrada. None usa o padrão do sistema — que nem sempre é o
+# microfone: num sistema com PipeWire + EasyEffects, o "default" do ALSA cai na
+# fonte do EasyEffects, e ela pode entregar silêncio digital ou áudio atenuado
+# em -33 dB. Aceita índice (int) ou parte do nome (str); veja a lista com
+#   .venv/bin/python -c "from core import audio; audio.listar_entradas()"
+#
+# Aqui está fixado no microfone digital pelo nome ALSA, e não pelo índice: os
+# índices mudam quando um fone entra ou sai. Medido nesta máquina, as rotas via
+# PipeWire perdiam de 7% a 20% dos blocos, enquanto esta fica em 0,1%.
+# Volte para None se trocar de hardware ou se o EasyEffects sair do caminho.
+INPUT_DEVICE = "hw:1,7"
+# Fração de amostras exatamente zero acima da qual a captura é considerada
+# quebrada. Microfone real nunca dá zero exato — sempre há ruído de fundo —,
+# então zeros significam blocos perdidos ou uma fonte muda no caminho.
+CAPTURE_MAX_ZEROS = 0.05
+CAPTURE_MIN_PEAK = 0.005        # pico abaixo disso é mudo, não é fala baixa
+
+# --- Voz / VAD (Fase 3) ---
+# Detecção de atividade de voz: a gravação para sozinha quando você para de
+# falar, em vez de exigir um segundo Enter. O modelo (Silero v6, ONNX) já vem
+# dentro do faster-whisper — nenhuma dependência ou download novo. Ver core/vad.py.
+VAD_ENABLED = True              # False → volta ao push-to-talk ("Enter para parar")
+VAD_THRESHOLD = 0.5             # probabilidade mínima para o frame contar como fala
+# Silêncio contínuo que encerra a fala. Abaixo de ~500ms a frase é cortada na
+# pausa entre orações; acima de ~1.2s a conversa fica lenta.
+VAD_SILENCE_MS = 800
+VAD_MIN_SPEECH_MS = 250         # rajada menor que isso é descartada (tosse, clique)
+VAD_START_TIMEOUT = 8.0         # s sem ninguém falar → desiste e volta ao prompt
+VAD_MAX_SECONDS = 30.0          # teto de segurança contra ruído contínuo
+VAD_PAD_MS = 300                # margem antes/depois do recorte (salva a 1ª sílaba)
+
+# --- Wake word (Fase 3) ---
+# Modo "sempre ouvindo": o microfone fica aberto e só a palavra abaixo abre um
+# turno. Ver core/wake.py para a cadeia e para as garantias de privacidade.
+#
+# DESLIGADO por padrão, e é assim que tem que ficar: manter o microfone aberto é
+# uma escolha do usuário, nunca um padrão herdado. Com WAKE_ENABLED = False nada
+# é carregado e o microfone não abre (invariante 5).
+WAKE_ENABLED = False
+WAKE_WORD = "Oráculo"
+# "onnx"        → classificador dedicado; não transcreve nada antes de acordar.
+# "transcricao" → sem modelo treinado: transcreve TODA fala da sala para conferir
+#                 o nome. Funciona, mas custa ~0.5 s de CPU por fala e faz passar
+#                 pelo ASR o que foi dito sem o nome. Opt-in consciente.
+WAKE_BACKEND = "onnx"
+# 0.0 → usa o limiar que o treinador escolheu e gravou no .npz (recomendado: ele
+# foi calibrado contra negativos reais). Um valor aqui sobrepõe.
+WAKE_THRESHOLD = 0.0
+WAKE_REFRACTORY_MS = 1500       # ignora novos disparos logo após um (janela desliza)
+# Áudio guardado em memória antes do gatilho. Precisa cobrir a palavra inteira
+# (~0,7 s) mais o atraso do disparo (até 0,4 s), sem esticar tanto a ponto de
+# engolir a frase anterior de quem estava conversando na sala.
+WAKE_PREROLL_MS = 1400
+WAKE_FOLLOWUP_TIMEOUT = 6.0     # s de escuta extra quando você diz só "Oráculo"
+# Depois de acordar, confere na transcrição que o nome está mesmo no começo. O
+# detector é acústico e não sabe a posição na frase, então "consultei o oráculo
+# de Delfos" dispara com razão — e é esta conferência que descarta o turno.
+WAKE_CONFIRMA_TEXTO = True
+WAKE_MAX_TOKENS = 3             # só procura o nome nos N primeiros tokens da fala
+WAKE_FUZZY = 0.82               # similaridade mínima ("oraculo" vs "oráculo")
+# WAKE_DIR fica na seção de persistência, junto com DATA_DIR (definido lá).
 
 # --- Transcrição de arquivos (/transcrever) ---
 # Extensões reconhecidas como áudio/vídeo. Serve só para avisar quando o caminho
@@ -74,8 +137,9 @@ TRANSCRIBE_EXTENSIONS = (
 TRANSCRIBE_PARAGRAPH_CHARS = 400  # tamanho mínimo de um parágrafo agrupado
 TRANSCRIBE_TIMESTAMPS = True      # prefixa cada parágrafo com [mm:ss]
 TRANSCRIBE_OUTPUT_DIR = None      # None → grava o .md ao lado do áudio
-# Acima desta duração o parakeet (sem VAD) degrada/trunca; o comando avisa e
-# sugere /stt whisper.
+# Acima desta duração o parakeet degrada/trunca; o comando avisa e sugere /stt
+# whisper. (O VAD da conversa não ajuda aqui: /transcrever ainda manda o arquivo
+# inteiro de uma vez — segmentar arquivo longo é um passo à parte.)
 TRANSCRIBE_PARAKEET_LIMIT = 30.0  # segundos
 
 # --- Voz / TTS ---
@@ -102,6 +166,11 @@ VOICE_MODE_DEFAULT = False      # começa em texto, /voz alterna
 # --- Persistência de sessões ---
 DATA_DIR = Path(os.path.expanduser("~/.oraculo"))
 SESSIONS_DIR = DATA_DIR / "sessions"
+# Modelos de característica do wake word + a cabeça treinada (ver core/wake.py).
+WAKE_DIR = DATA_DIR / "wake"
+# Gravações do dono dizendo o nome. Nascem no treinador do wake word e são a
+# semente da verificação de voz (passo 3c).
+VOICE_DIR = DATA_DIR / "voice"
 RECENT_SESSIONS_ON_SPLASH = 3
 
 # --- Telemetria ---

@@ -146,6 +146,10 @@ def _status(ctx: dict) -> dict:
     repaint, então acompanha /modelo, /voz e /think sem precisar de callback."""
     chain = ctx.get("chain")
     flags = ["voz" if ctx.get("voice_mode") else "texto"]
+    # O microfone aberto precisa ficar visível. É a única pista de que a sala
+    # está sendo ouvida, e escondê-la seria a pior escolha possível aqui.
+    if ctx.get("voice_mode") and config.WAKE_ENABLED:
+        flags.append(f'ouvindo "{config.WAKE_WORD}"')
     flags.append("think on" if ctx.get("thinking") else "think off")
     if chain is not None:
         # Memória em pares (pergunta+resposta), que é como a janela é cortada.
@@ -158,21 +162,47 @@ def _status(ctx: dict) -> dict:
     }
 
 
-def _listen(ctx: dict, ask, wait_stop=None) -> str | None:
-    """Captura uma fala no modo voz (push-to-talk). Primeiro Enter inicia a
-    gravação, segundo Enter encerra; texto digitado é usado diretamente como
-    escape. Retorna o texto ou None se nada foi captado."""
-    from core import audio, stt
+def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
+            interrupt=None, escuta_ctx=None) -> str | None:
+    """Captura uma fala no modo voz. Retorna o texto ou None se nada foi captado.
+
+    Três caminhos, do mais automático ao mais manual:
+
+    - **wake word ligada:** o microfone já está aberto; basta dizer "Oráculo".
+    - **VAD ligado:** Enter abre o microfone e a gravação encerra sozinha.
+    - **nenhum dos dois:** push-to-talk, um segundo Enter encerra.
+    """
+    from core import audio, stt, vad, wake
 
     console = ctx["console"]
     ctx["last_stt_seconds"] = None
-    typed = ask("[dim][voz] Enter para gravar (ou digite e Enter):[/] ")
-    if typed:
-        return typed
+    usando_wake = config.WAKE_ENABLED and wake.disponivel()
+
+    if not usando_wake:
+        typed = ask("[dim][voz] Enter para falar (ou digite e Enter):[/] ")
+        if typed:
+            return typed
 
     try:
-        ui.notice(console, "gravando... Enter para parar")
-        path = audio.record_ptt(wait_stop=wait_stop)
+        if usando_wake:
+            path, digitado = _escutar_wake(ctx, ask_nowait, interrupt,
+                                           escuta_ctx)
+            if digitado:                    # você preferiu digitar
+                return digitado
+            if path is None:                # Ctrl+C: sai da escuta, não do app
+                config.WAKE_ENABLED = False
+                ui.notice(console, f'escuta encerrada — diga /despertar para '
+                                   f'voltar a chamar por "{config.WAKE_WORD}".',
+                          style="cyan")
+                return None
+        elif config.VAD_ENABLED and vad.disponivel():
+            path = _gravar_com_vad(console)
+            if path is None:
+                ui.notice(console, "não ouvi nada — tente de novo")
+                return None
+        else:
+            ui.notice(console, "gravando... Enter para parar")
+            path = audio.record_ptt(wait_stop=wait_stop)
         ui.notice(console, "transcrevendo...")
         _stt_t0 = time.monotonic()
         text = stt.transcribe(path)
@@ -183,11 +213,105 @@ def _listen(ctx: dict, ask, wait_stop=None) -> str | None:
         ctx["voice_mode"] = False
         return None
 
+    if usando_wake:
+        text = _apos_acordar(ctx, text)
+
     if not text:
         ui.notice(console, "não entendi nada — tente de novo")
         return None
 
     return text
+
+
+def _gravar_com_vad(console) -> str | None:
+    """Grava com parada automática, narrando a transição para o usuário.
+
+    Sem o aviso de "ouvindo" a interface fica muda entre o Enter e a primeira
+    palavra, e não dá para saber se o microfone abriu.
+    """
+    from core import audio, vad
+
+    def _on_state(estado: str) -> None:
+        # Só a entrada em FALANDO interessa: o retorno a AGUARDANDO acontece
+        # quando uma rajada curta é descartada, e anunciar isso viraria ruído.
+        if estado == vad.FALANDO:
+            ui.notice(console, "gravando... (pare de falar para enviar)")
+
+    ui.notice(console, "ouvindo...")
+    return audio.record_vad(on_state=_on_state)
+
+
+def _escutar_wake(ctx: dict, ask_nowait, interrupt, escuta_ctx=None):
+    """Espera pela palavra de despertar. Devolve (caminho do WAV, texto digitado).
+
+    Digitar continua sendo o escape imediato: a caixa é consultada sem bloquear a
+    cada bloco de 80 ms. Bloquear nela em paralelo deixaria uma thread pendurada
+    que engoliria a mensagem seguinte.
+    """
+    from core import audio
+
+    console = ctx["console"]
+    digitado: dict[str, str] = {}
+
+    def _abortar() -> bool:
+        if interrupt is not None and interrupt.is_set():
+            return True
+        if ask_nowait is not None:
+            texto = ask_nowait()
+            if texto:
+                digitado["texto"] = texto
+                return True
+        return False
+
+    def _on_state(estado: str) -> None:
+        if estado == "ouvindo":
+            ui.notice(console, f'ouvindo — diga "{config.WAKE_WORD}" '
+                               f'(Ctrl+C encerra a escuta)')
+        elif estado == "acordado":
+            ui.notice(console, "sim?", style="cyan")
+
+    contexto = escuta_ctx() if escuta_ctx is not None else contextlib.nullcontext()
+    try:
+        with contexto:
+            path = audio.escutar_wake(on_state=_on_state, abortar=_abortar)
+    except KeyboardInterrupt:
+        return None, None
+    return path, digitado.get("texto")
+
+
+def _apos_acordar(ctx: dict, texto: str) -> str:
+    """Tira o "Oráculo," da frente; se sobrou nada, abre a escuta de continuação.
+
+    É o caso de quem chama o nome e só depois formula o pedido. Sem isso, dizer
+    apenas "Oráculo" viraria um turno vazio e a chamada se perderia.
+    """
+    from core import audio, stt, wake
+
+    console = ctx["console"]
+
+    # Segunda etapa, de graça: o detector é acústico e não sabe onde a palavra
+    # caiu na frase, então "consultei o oráculo de Delfos" dispara com razão. A
+    # transcrição já existe; conferir que o nome está no COMEÇO custa nada e é o
+    # que faz valer a promessa de só responder a quem chamou.
+    if config.WAKE_CONFIRMA_TEXTO and not wake.contem_nome(texto):
+        ui.notice(console, f'não era para mim (não começou com '
+                           f'"{config.WAKE_WORD}") — continuo ouvindo')
+        return ""
+
+    pedido = wake.remove_nome(texto)
+    if pedido:
+        return pedido
+
+    ui.notice(console, "estou ouvindo...")
+    path = audio.record_vad(start_timeout=config.WAKE_FOLLOWUP_TIMEOUT)
+    if path is None:
+        return ""
+    ui.notice(console, "transcrevendo...")
+    t0 = time.monotonic()
+    pedido = stt.transcribe(path)
+    ctx["last_stt_seconds"] = (ctx.get("last_stt_seconds") or 0) + \
+        (time.monotonic() - t0)
+    return wake.remove_nome(pedido)
 
 
 def run_standalone(argv: list[str]) -> int:
@@ -299,13 +423,16 @@ def _run_fullscreen(chain: OraculoChain) -> None:
 
         _chat_loop(chain, ctx, ask=_ask, live_factory=sessao.live, echo=True,
                    watch_ctrl_o=lambda _toggle: contextlib.nullcontext(),
-                   interrupt=sessao.interromper, wait_stop=sessao.wait_enter)
+                   interrupt=sessao.interromper, wait_stop=sessao.wait_enter,
+                   ask_nowait=sessao.ask_nowait,
+                   escuta_ctx=sessao.modo_escuta)
 
     tui.run(loop, lambda: _status(ctx))
 
 
 def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
-               watch_ctrl_o, interrupt=None, wait_stop=None) -> None:
+               watch_ctrl_o, interrupt=None, wait_stop=None,
+               ask_nowait=None, escuta_ctx=None) -> None:
     """Laço de turnos, compartilhado pelos dois modos de desenho.
 
     O que muda entre eles é injetado: de onde vem a mensagem (`ask`), o que
@@ -319,7 +446,9 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
     while ctx["running"]:
         try:
             if ctx["voice_mode"]:
-                user_input = _listen(ctx, ask, wait_stop=wait_stop)
+                user_input = _listen(ctx, ask, wait_stop=wait_stop,
+                                     ask_nowait=ask_nowait, interrupt=interrupt,
+                                     escuta_ctx=escuta_ctx)
                 if not user_input:
                     continue
             else:

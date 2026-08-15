@@ -137,7 +137,9 @@ def _transcribe_onnx_asr(audio_path: str, model_name: str, language: str | None)
     Fixa o idioma quando definido, em vez de deixar a detecção automática (que
     oscila entre idiomas e erra palavras). Espera WAV 16 kHz mono — o formato
     gravado por audio.record_ptt (RECORD_SAMPLERATE = 16000), sem conversão.
-    Clipes acima de ~30s passam do limite do modelo (sem VAD — ver Fase 3)."""
+    Clipes acima de ~30s passam do limite do modelo. Na conversa isso não ocorre
+    (o core/vad.py recorta a fala e VAD_MAX_SECONDS a limita); em /transcrever de
+    arquivo longo, sim — daí o aviso."""
     kwargs = {}
     if language:
         kwargs["language"] = language

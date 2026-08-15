@@ -386,6 +386,9 @@ class FullscreenSession:
         # Sinaliza ao laço que o usuário pediu para interromper a resposta.
         self.interromper = threading.Event()
         self._ocupado = False
+        # Escuta do wake word: a caixa aceita texto (o laço não está gerando
+        # nada), mas o Ctrl+C tem que interromper a escuta, não encerrar o app.
+        self._escutando = False
         # Definido antes do editor: a barra de status já lê este estado.
         self.mouse = bool(config.TUI_MOUSE)
         # Seleção com o mouse + detecção de duplo/triplo clique.
@@ -481,8 +484,9 @@ class FullscreenSession:
 
         @kb.add("c-c")
         def _interromper(event) -> None:
-            # Durante a geração, Ctrl+C corta a resposta; ocioso, encerra.
-            if self._ocupado:
+            # Gerando, Ctrl+C corta a resposta; escutando, encerra a escuta;
+            # ocioso, encerra o Oráculo.
+            if self._ocupado or self._escutando:
                 self.interromper.set()
             else:
                 self._encerrar()
@@ -590,6 +594,49 @@ class FullscreenSession:
         self._ocupado = True
         self.interromper.clear()
         self._invalidate()
+        return item
+
+    def modo_escuta(self):
+        """Contexto da escuta pelo wake word.
+
+        Solta o `_ocupado` para o `_submit` voltar a aceitar Enter — sem isso o
+        texto digitado durante a escuta é engolido em silêncio e fica preso na
+        caixa. Mas mantém o Ctrl+C ligado ao `interromper`, senão ele encerraria
+        o Oráculo inteiro em vez de só sair da escuta.
+        """
+        import contextlib
+
+        @contextlib.contextmanager
+        def _ctx():
+            anterior, self._ocupado = self._ocupado, False
+            self._escutando = True
+            self.interromper.clear()
+            self._invalidate()
+            try:
+                yield
+            finally:
+                self._escutando = False
+                self._ocupado = anterior
+                self._invalidate()
+
+        return _ctx()
+
+    def ask_nowait(self) -> str | None:
+        """Pega uma mensagem já digitada, ou None se não houver. Nunca bloqueia.
+
+        É o que permite continuar digitando enquanto o wake word escuta. A versão
+        bloqueante não serviria: uma thread parada no `_fila.get()` enquanto o
+        microfone decide sozinho ficaria pendurada e engoliria a mensagem
+        *seguinte* — o mesmo risco que manteve o `wait_stop` fora do VAD.
+        """
+        import queue as _queue
+
+        try:
+            item = self._fila.get_nowait()
+        except _queue.Empty:
+            return None
+        if item is None or self._encerrando.is_set():
+            raise EOFError
         return item
 
     # -- seleção com o mouse ---------------------------------------------

@@ -10,7 +10,10 @@ Oráculo é um assistente local estilo Jarvis, 100% offline, desenvolvido em fas
 - **Fase 2 (Voz) — concluída:** STT (Whisper/Parakeet) + TTS (Kokoro/Piper) com fala em
   streaming, roteamento de comandos, persistência de sessões, telemetria opt-in,
   thinking com toggle ao vivo, barge-in por Esc, `/transcrever` e o wrapper `bin/oraculo`
-- **Fase 3 — atual:** wake word + VAD + verificação de voz (só responder ao dono)
+- **Fase 3 — atual:** VAD concluído (`core/vad.py`: a gravação para sozinha quando você
+  para de falar, `/vad` alterna) e wake word concluída (`core/wake.py` + `tools/treinar_wake.py`:
+  o microfone fica aberto e só "Oráculo" abre um turno, `/despertar` alterna). Falta a
+  verificação de voz (só responder ao dono)
 - **Fases futuras:** RAG com Obsidian (4), comandos do sistema com whitelist segura (5)
 
 ## Ambiente
@@ -55,6 +58,8 @@ oraculo/
     ├── commands.py  # roteamento de comandos (/ajuda, /voz, /think, /stt, /modelo...)
     ├── history.py   # persistência de sessões em JSON (~/.oraculo/sessions)
     ├── stt.py       # áudio → texto (faster-whisper na GPU | parakeet na CPU)
+    ├── vad.py       # detecção de atividade de voz (Silero v6, streaming frame a frame)
+    ├── wake.py      # palavra de despertar: mel + embedding (openWakeWord) + cabeça .npz
     ├── transcript.py# transcrição de arquivos: parágrafos, Markdown, gravação
     ├── tts.py       # texto → áudio (Kokoro | Piper)
     ├── speaker.py   # fala em streaming: síntese + reprodução em pipeline, com barge-in
@@ -78,6 +83,112 @@ Regras de código:
 - **Tratamento de interrupção:** `KeyboardInterrupt` durante uma resposta deve interromper a resposta, não fechar o programa. `Ctrl+D`/`EOFError` encerra.
 - **Dependência pesada é opcional e preguiçosa.** Importar dentro da função, não no topo do módulo, e degradar com aviso claro se faltar — o modo texto nunca pode quebrar por falta de lib de voz.
 - **Threads de áudio saem por flag + timeout curto**, nunca por sentinela na fila (ver `speaker.py`).
+
+**VAD (`core/vad.py`) — o que custou tempo.**
+
+- **O modelo já está no disco.** O `faster-whisper` empacota o `silero_vad_v6.onnx` em
+  `assets/`, exposto por `faster_whisper.vad.get_vad_model()`. Nada a instalar, nada a
+  baixar. Antes de adicionar dependência de áudio nova, **procure dentro do que já
+  existe** — o venv é Python 3.14, onde `silero-vad` (arrasta torch) e `webrtcvad`
+  (extensão C sem wheel) não entram. A regra para o resto da Fase 3 é a mesma: ONNX
+  direto no `onnxruntime` que já está aqui.
+- **`SileroVADModel.__call__` do faster-whisper não serve para streaming**: ele zera o
+  estado `h`/`c` da LSTM a cada chamada e exige o áudio inteiro de uma vez. Chamá-lo por
+  chunk de 512 amostras julga cada frame sem contexto. Por isso `core/vad.py` fala direto
+  com a `InferenceSession` e carrega `h`/`c` de um frame para o outro. Os nomes das
+  entradas (`input`/`h`/`c`) são **conferidos**, não assumidos — o v5 usava outra
+  assinatura e o arquivo pode trocar numa atualização.
+- **Inferência nunca no callback do PortAudio.** O callback só empilha na fila; quem
+  decide é o laço na thread chamadora. É barato (~0,06 ms/frame, orçamento de 32 ms), mas
+  bloquear no callback causa estouro de buffer.
+- **Timeout de início em dois relógios, vale o que estourar primeiro.** O de frames
+  descreve o áudio e mantém o teste offline determinístico; o de parede descreve o que o
+  usuário sente. A primeira abertura do dispositivo custa perto de 1 s e os blocos chegam
+  atrasados: contar só frames fez uma espera de 4 s durar 7,4 s na tela.
+- **O `wait_stop` não entra no caminho do VAD, de propósito.** Chamar `sessao.wait_enter`
+  em paralelo deixaria uma thread presa num `_fila.get()` depois que o VAD encerrasse
+  sozinho, e ela engoliria a *próxima* mensagem digitada.
+- **Antes de "consertar" um falso disparo, confirme que é falso.** O VAD disparando numa
+  sala "silenciosa" parecia sensibilidade demais e quase virou um portão de energia (que
+  teria abafado fala baixa de verdade). Era fala mesmo: o Whisper transcreveu palavras do
+  ruído, e o espectro tinha 44% da energia em 1–3 kHz contra 1% abaixo de 150 Hz —
+  ventoinha seria o inverso. **Transcreva o "ruído" e olhe o espectro** antes de mexer no
+  limiar.
+
+**Wake word (`core/wake.py`, `tools/treinar_wake.py`) — o que custou tempo.**
+
+- **"Precisa de torch/TF de 2022" é falso, e quase custou o passo inteiro.** Essa fama
+  vale para o *script de treino* do openWakeWord, não para a matemática. A arquitetura é
+  um extrator **congelado** com uma cabeça minúscula por cima; treinar a cabeça é um MLP
+  de 1536 entradas, que o sklearn faz no Python 3.14 sem GPU. Eu cheguei a recomendar um
+  portão por transcrição por acreditar no contrário. **Antes de aceitar que uma
+  dependência é impossível, olhe o que ela realmente faz.**
+- **Os negativos já existem prontos.** `davidscripka/openwakeword_features` publica
+  ~2000 h como *embeddings* já calculados. O `.npy` é contíguo depois do cabeçalho, então
+  um range request nos primeiros N bytes dá as primeiras N/3072 janelas — não é preciso
+  baixar 17 GB nem processar áudio nenhum.
+- **Valide a cadeia contra um modelo pronto antes de treinar o seu.** Reimplementar
+  mel→embedding→cabeça à mão tem várias chances de errar em silêncio (a transformação
+  `(x/10)+2` é a mais traiçoeira: sem ela nada falha, o vetor só perde sentido). Sintetizar
+  "hey jarvis" e rodar o `hey_jarvis_v0.1.onnx` oficial provou a cadeia em minutos: 0,998
+  nos positivos, ≤0,31 nos negativos. Sem esse teste, um erro aqui viraria "o treino não
+  converge" e a caçada seria no lugar errado.
+- **O preenchimento de silêncio tem que passar do aquecimento.** O extrator só produz a
+  primeira janela após ~2,5 s (76 frames de mel + 16 embeddings). Com 1 s de padding na
+  frente, a janela que interessa — a que termina logo depois da palavra — ainda não existe
+  quando a palavra acaba, e o clipe inteiro é descartado sem erro nenhum. E o padding é
+  **ruído fraco, não zero**: silêncio digital absoluto não existe no microfone.
+- **Separe treino de avaliação por CLIPE, nunca por janela.** As janelas de um mesmo clipe
+  (e de seus aumentos) são quase duplicatas. Dividir por janela dá recall de 100% que não
+  quer dizer nada. Eu publiquei esse número errado antes de perceber.
+- **A janela positiva se ancora no fim da PALAVRA, não no fim do clipe.** Sintetizar
+  "Oráculo, me ajuda." e rotular a janela do fim do clipe ensina o modelo a disparar no fim
+  de "me ajuda". O sintoma foi cruel: 100% de recall na avaliação do treinador e falha
+  exatamente no caso de uso principal — "Oráculo, que horas são?" pontuava 0,76 contra um
+  limiar de 0,999. Por isso as frases positivas **terminam** na palavra, e o caso "chamou e
+  já pediu" é montado colando uma continuação depois, com o corte no ponto que nós mesmos
+  emendamos. Um teste offline independente do treinador é o que pega isso.
+- **O `MLPClassifier` não aceita peso por classe.** Com 1 positivo para cada 100
+  negativos ele aprende a responder "não" sempre — 99% de acerto e recall zero. Os
+  positivos precisam ser replicados até uma proporção sã.
+- **`.npy` grande se abre com `np.memmap`, nunca com `.tobytes()`.** Materializar os 2,5 GB
+  de negativos na RAM derrubou o treino por OOM numa máquina de 16 GB (6,2 GB de RSS
+  anônimo). Com memmap são 40 MB, e as conversões acontecem por lote. E o cabeçalho do
+  `.npy` deve ser **lido** (`read_array_header_*`), não assumido em 128 bytes: errar isso
+  desalinha todas as janelas em silêncio.
+- **Limiar se mede, não se chuta — mas a regra precisa exigir FOLGA.** O treinador reserva
+  horas de negativo que nunca viu e escolhe pelo falso positivo medido ali. Só que "o maior
+  limiar com 0 falso positivo" leva ao extremo da tabela: com 0,999 uma fala legítima que
+  pontua 0,998 é rejeitada, enquanto os negativos ficavam todos abaixo de 0,28. Daí o piso
+  de *janelas* positivas (`--janela-min`) — o recall por fala é 100% em todo limiar e não
+  discrimina nada sozinho.
+- **Nada que contenha a palavra pode entrar na lista de negativos difíceis.** "oráculos de
+  Delfos" esteve lá: é "Oráculo" + /s/, o detector acertava ao disparar e o rótulo é que
+  estava errado — e isso envenena tanto o treino quanto a métrica. Quem trata "consultei o
+  oráculo ontem" é a conferência de texto pós-transcrição (`WAKE_CONFIRMA_TEXTO`), porque o
+  modelo acústico não tem como saber a posição da palavra na frase.
+- **Nunca bloqueie na caixa de entrada em paralelo com a escuta.** É a mesma armadilha que
+  manteve o `wait_stop` fora do VAD: uma thread parada em `_fila.get()` enquanto o
+  microfone decide sozinho fica pendurada e engole a mensagem *seguinte*. Daí o
+  `tui.ask_nowait()`, consultado a cada bloco de 80 ms.
+- **O acumulador de áudio só nasce depois do gatilho**, dentro do `if`, nunca no topo da
+  função. Um `frames = []` ligado desde o começo é uma gravação contínua da sala esperando
+  um bug para virar arquivo. A garantia de privacidade é estrutural, não uma promessa.
+- VAD e wake word usam tamanhos de frame diferentes (512 e 1280) que **não são
+  múltiplos** — a sobra precisa atravessar as iterações do laço.
+- **O dispositivo padrão do sistema não é necessariamente o microfone, e falhar assim não
+  levanta exceção nenhuma.** Com PipeWire + EasyEffects, o `default`/`pulse` do PortAudio
+  caía na *Easy Effects Source* (atenuada em −33 dB) e devolvia de 7% a 100% de silêncio
+  digital; o ALSA cru do mic (`hw:1,7`) ficava em 0,1%. Daí `config.INPUT_DEVICE`, fixado
+  por **nome** e não por índice — índice muda quando um fone entra.
+- **Amostra exatamente zero denuncia captura quebrada.** Microfone real sempre tem ruído de
+  fundo; zero exato é bloco perdido ou fonte muda. `audio.diagnostico_captura()` roda
+  **antes** do `_normalize` — de propósito, porque era o próprio `_normalize` que
+  amplificava o fragmento sobrevivente até 0,95 e fazia o arquivo quebrado parecer bom. Um
+  WAV com 58% de zeros já foi gravado e guardado sem um aviso sequer.
+- **Áudio de sala é o melhor teste de falso positivo que existe aqui.** 90 s de vídeo
+  falando em português, com o detector escutando, sem um disparo — vale mais que qualquer
+  negativo sintetizado.
 
 ## Invariantes que NÃO devem regredir
 

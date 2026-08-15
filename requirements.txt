@@ -26,10 +26,33 @@ soundfile
 # Vem como dependência transitiva do sounddevice, mas é declarado aqui por ser importado explicitamente em core/audio.py.
 numpy
 
+# --- VAD (Fase 3) — nada a instalar ---
+# A parada automática da gravação (core/vad.py) usa o Silero v6, que já vem
+# empacotado dentro do faster-whisper (assets/silero_vad_v6.onnx). Por isso não há
+# linha nova aqui: nenhum pacote, nenhum download, offline desde a 1ª execução.
+# Os pacotes usuais de VAD foram descartados de propósito — `silero-vad` arrasta o
+# torch e `webrtcvad` é extensão C sem wheel para o Python 3.14 deste venv.
+
+# --- Wake word (Fase 3) — nada a instalar no runtime ---
+# A escuta pela palavra "Oráculo" (core/wake.py) roda no onnxruntime declarado
+# abaixo, com três modelos pequenos: dois de característica do openWakeWord
+# (melspectrogram + embedding, 2,4 MB somados, Apache-2.0) e a cabeça treinada
+# aqui mesmo. Os dois primeiros são baixados UMA vez pelo treinador; a cabeça sai
+# de tools/treinar_wake.py. Nada disso acontece no caminho da conversa.
+#
+# O pacote `openwakeword` foi descartado de propósito: não instala no Python 3.14
+# deste venv (arrasta tflite-runtime) e o que ele faz é justamente a cadeia que o
+# core/wake.py implementa em ~40 linhas.
+#
+# scikit-learn é dependência SÓ do treinador — como o pyte é só do teste. O
+# runtime não importa sklearn: a cabeça é um .npz lido com numpy.
+#   .venv/bin/python -m pip install scikit-learn   # só para treinar
+
 # --- STT alternativo: Parakeet V3 (onnx-asr, CPU rápida) ---
 # Motor opcional selecionável via config.STT_ENGINE = "parakeet". Coexiste com o
 # faster-whisper. onnxruntime = CPU; o modelo ONNX é baixado do HF na 1ª execução.
-# Limite de ~20-30s por clipe (sem VAD); tratável com VAD na Fase 3.
+# Limite de ~20-30s por clipe: irrelevante na conversa (o VAD recorta a fala e
+# VAD_MAX_SECONDS a limita), mas ainda vale para /transcrever de arquivo longo.
 onnx-asr
 onnxruntime
 

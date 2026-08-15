@@ -28,6 +28,8 @@ STANDALONE_COMMANDS = {"/transcrever", "/transcricao", "/ajuda", "/help", "/?"}
 COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
     ("/ajuda", "", "mostra esta ajuda"),
     ("/voz", "", "alterna entre modo voz e modo texto"),
+    ("/vad", "", "liga/desliga a parada automática da gravação"),
+    ("/despertar", "", "liga/desliga a escuta pela palavra \"Oráculo\""),
     ("/think", "", "liga/desliga o raciocínio; Ctrl+O mostra o texto"),
     ("/stt", "<motor>", "lista ou troca o motor de transcrição"),
     ("/transcrever", "<arquivo>", "transcreve um áudio; --salvar grava um .md ao lado"),
@@ -109,6 +111,64 @@ def _handle_think(ctx: dict) -> None:
                   style="cyan")
     else:
         ui.notice(console, "Raciocínio (thinking) desativado.", style="cyan")
+
+
+def _handle_vad(ctx: dict) -> None:
+    """Alterna a parada automática da gravação (VAD) e o push-to-talk."""
+    console = ctx["console"]
+    quer = not config.VAD_ENABLED
+
+    if quer:
+        # Só liga se o modelo realmente carregar: melhor recusar aqui, com a
+        # causa na tela, do que falhar no meio da próxima gravação.
+        from core import vad
+
+        if not vad.disponivel():
+            ui.warn(console, "VAD indisponível — o push-to-talk continua ativo.")
+            return
+
+    config.VAD_ENABLED = quer
+    if quer:
+        ui.notice(console, "VAD ativado — a gravação para sozinha quando você "
+                  "parar de falar.", style="cyan")
+    else:
+        ui.notice(console, "VAD desativado — Enter para gravar, Enter de novo "
+                  "para parar.", style="cyan")
+
+
+def _handle_despertar(ctx: dict) -> None:
+    """Alterna a escuta pela palavra de despertar.
+
+    Ao ligar, diz em voz alta o que isso implica: o microfone fica aberto. Essa
+    frase não é enfeite — é o que faz do modo uma escolha informada.
+    """
+    console = ctx["console"]
+    quer = not config.WAKE_ENABLED
+
+    if quer:
+        from core import wake
+
+        if not wake.disponivel():
+            ui.warn(console, "Escuta indisponível — o push-to-talk continua ativo.")
+            motivo = wake.motivo_indisponivel()
+            for linha in motivo.splitlines():
+                if linha.strip():
+                    ui.warn(console, f"  {linha.strip()}")
+            return
+
+    config.WAKE_ENABLED = quer
+    if quer:
+        ui.notice(console,
+                  f'Escuta ativada — o microfone fica aberto e eu respondo '
+                  f'quando você disser "{config.WAKE_WORD}".', style="cyan")
+        ui.notice(console,
+                  "  Nada é gravado nem transcrito antes disso. Ctrl+C encerra "
+                  "a escuta.")
+        if not ctx.get("voice_mode"):
+            ui.notice(console, "  Só vale no modo voz — use /voz para entrar.")
+    else:
+        ui.notice(console, "Escuta desativada — o microfone só abre quando você "
+                  "pedir.", style="cyan")
 
 
 def _handle_stt(arg: str, ctx: dict) -> None:
@@ -276,6 +336,14 @@ def handle(raw: str, ctx: dict) -> bool:
         ctx["voice_mode"] = not ctx["voice_mode"]
         estado = "ativado" if ctx["voice_mode"] else "desativado"
         ui.notice(console, f"Modo voz {estado}.", style="cyan")
+        return True
+
+    if cmd == "/vad":
+        _handle_vad(ctx)
+        return True
+
+    if cmd == "/despertar":
+        _handle_despertar(ctx)
         return True
 
     if cmd == "/think":

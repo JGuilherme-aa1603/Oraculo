@@ -78,6 +78,8 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 
 - `/ajuda` — lista os comandos
 - `/voz` — alterna entre modo voz e modo texto
+- `/vad` — liga/desliga a parada automática da gravação (desligado = push-to-talk)
+- `/despertar` — liga/desliga a escuta pela palavra "Oráculo" (microfone sempre aberto)
 - `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
 - `/transcrever <arquivo> [--salvar]` — transcreve um arquivo de áudio
@@ -158,11 +160,81 @@ Sem `prompt_toolkit` instalado, ou rodando sem terminal interativo (pipe, redire
 a entrada cai automaticamente para o prompt simples do rich — nada deixa de funcionar.
 Para desligar a caixa de propósito, `INPUT_RICH_EDITOR = False` no `config.py`.
 
-No modo voz (push-to-talk), pressione Enter para começar a gravar e Enter de novo
-para parar; ou digite um texto e Enter como atalho. A transcrição usa o Whisper
+No modo voz, pressione Enter para abrir o microfone e simplesmente fale: o VAD
+percebe quando você parou e encerra a gravação sozinho (não há segundo Enter). Se
+ninguém falar em 8 segundos, ele desiste e devolve o prompt. Digitar um texto e dar
+Enter continua servindo de atalho. A transcrição usa o Whisper
 `large-v3` na GPU (quase em tempo real); a fala é sintetizada pelo Kokoro (voz feminina).
+
+**Parada automática (VAD):** `/vad` liga e desliga. Desligado, volta ao push-to-talk
+clássico — Enter para gravar, Enter de novo para parar. O modelo (Silero v6) já vem
+dentro do `faster-whisper`, então não há dependência nem download extra. Se a gravação
+estiver cortando o fim das suas frases, aumente `VAD_SILENCE_MS` no `config.py`; se
+estiver disparando com ruído de fundo, suba o `VAD_THRESHOLD`.
 As respostas são renderizadas como Markdown no terminal; antes da síntese de voz a
 marcação é removida para a fala não soletrar símbolos.
+
+**Chamar pelo nome (wake word):** com `/despertar`, o Enter também some — o microfone
+fica aberto e basta dizer **"Oráculo, que horas são?"**. O nome é removido antes de a
+frase chegar ao modelo. Dizendo só "Oráculo", ele responde e abre uma escuta de
+continuação para você formular o pedido. **Ctrl+C** encerra a escuta sem sair do
+Oráculo.
+
+No modo tela cheia dá para simplesmente **digitar** enquanto ele escuta — a mensagem tem
+preferência e a escuta é abandonada. No modo inline isso não vale (não há leitura não
+bloqueante do terminal): use Ctrl+C primeiro e depois digite.
+
+O detector é acústico e não sabe onde a palavra caiu na frase, então "consultei o **oráculo**
+de Delfos" acorda ele com razão. Depois de transcrever, o Oráculo confere que o nome está no
+começo e, se não estiver, descarta o turno e volta a ouvir (`WAKE_CONFIRMA_TEXTO`).
+
+O que acontece com o que é dito **sem** o nome:
+
+- não vai para o disco — o áudio vive num anel em memória de 2 s que se sobrescreve;
+- não é transcrito — o portão é um classificador que devolve um número, não texto;
+- não chega ao modelo nem ao transcript.
+
+Enquanto a escuta está ligada, a barra de status mostra `ouvindo "Oráculo"`, para nunca
+haver dúvida sobre o microfone estar aberto. O modo nasce **desligado** e só liga com
+`/despertar`.
+
+**Custo medido** (Raptor Lake, sala silenciosa, cinco medições de 45 s): **3% a 5% de um
+núcleo** — cerca de 1% é o microfone aberto e o resto é o detector, que gasta ~2,3 ms por
+bloco de 80 ms (quase tudo no modelo de embedding). A variação vem da carga de fundo. Some
+~0,5 s de arranque, uma vez, para carregar os modelos. A memória é o anel de pré-roll:
+88 KB.
+
+Antes do primeiro uso é preciso treinar a cabeça do detector — uma vez, na sua máquina,
+sem GPU e sem torch:
+
+```fish
+.venv/bin/python -m pip install scikit-learn   # só para treinar
+.venv/bin/python tools/treinar_wake.py --gravar 40   # você dizendo "Oráculo" 40x
+.venv/bin/python tools/treinar_wake.py --baixar-vozes
+```
+
+**Se o microfone não parecer funcionar**, teste antes de gravar qualquer coisa:
+
+```fish
+.venv/bin/python tools/treinar_wake.py --testar-microfone
+```
+
+Ele grava um trecho em cada entrada, mede a captura, transcreve e diz qual serve. O padrão
+do sistema **nem sempre é o microfone**: nesta máquina, com PipeWire e EasyEffects no
+caminho, as rotas `default`/`pulse`/`pipewire` perdiam de 7% a 20% dos blocos (e às vezes
+devolviam 100% de silêncio digital), enquanto o dispositivo ALSA do microfone ficava em
+0,1%. Daí `INPUT_DEVICE = "hw:1,7"` no `config.py` — troque pelo que o teste indicar.
+
+Amostra exatamente zero não existe em microfone real (sempre há ruído de fundo), então o
+Oráculo trata isso como captura quebrada e recusa a gravação com a causa na tela, em vez de
+guardar um arquivo ruim. Repare que abrir o dispositivo ALSA direto **contorna o PipeWire**,
+o que também dispensa qualquer cancelamento de eco que estivesse configurado lá — se o
+Oráculo passar a se ouvir falando, é por aí.
+
+O `--gravar` é opcional mas faz muita diferença: as vozes sintéticas pt-BR disponíveis
+têm timbre parecido demais, e sem amostras suas o modelo aprende "voz de robô" em vez de
+"a palavra". O treinador imprime a taxa de falso positivo por hora medida em áudio real
+que ele nunca viu, e escolhe o limiar a partir dela — se o número sair ruim, ele diz.
 
 Enquanto a resposta não começa, um indicador mostra **"Carregando modelo..."** se o
 Ollama ainda está subindo o modelo na VRAM (cold start) ou **"Pensando..."** quando
@@ -234,16 +306,20 @@ oraculo/
 │   ├── commands.py  # Roteamento de comandos (/ajuda, /voz, /think, /modelo, ...)
 │   ├── history.py   # Persistência de sessões em JSON (~/.oraculo/sessions)
 │   ├── stt.py       # Whisper (faster-whisper) — áudio → texto
+│   ├── vad.py       # Detecção de atividade de voz (Silero) — sabe quando você parou
+│   ├── wake.py      # Palavra de despertar "Oráculo" (openWakeWord + cabeça própria)
 │   ├── transcript.py# Transcrição de arquivos: parágrafos, Markdown, gravação
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
-│   ├── audio.py     # Captura de microfone + reprodução
+│   ├── audio.py     # Captura de microfone (push-to-talk e VAD) + reprodução
 │   ├── keyboard.py  # Monitor de tecla no terminal (barge-in por Esc)
 │   ├── telemetry.py # Latência por estágio + tokens/s (opt-in)
 │   ├── ui.py        # Calha do transcript (eco, cabeçalho, corpo, rodapé)
 │   ├── prompt.py    # Caixa de entrada: borda, histórico e autocomplete
 │   ├── tui.py       # Modo tela cheia: transcript rolável + caixa fixa no rodapé
 │   └── splash.py    # Splash screen de duas colunas (rich)
+├── tools/
+│   └── treinar_wake.py  # Treina a cabeça do wake word (roda uma vez, fora do app)
 ├── requirements.txt
 └── README.md
 ```
@@ -295,6 +371,6 @@ nova é exigida (apenas a biblioteca-padrão + `rich`).
 |------|-----------|--------|
 | 1 — MVP | Chat no terminal + memória + Ollama | ✅ Concluída |
 | 2 — Voz | Whisper (STT) + Piper (TTS) + comandos + persistência | ✅ Concluída |
-| 3 — Wake Word | OpenWakeWord + VAD + Resemblyzer (só sua voz) | 🔜 Próxima |
+| 3 — Wake Word | VAD (Silero) ✅ · wake word "Oráculo" ✅ · verificação de voz | 🚧 Em andamento |
 | 4 — RAG | Indexar notas do Obsidian (nomic-embed-text) | ⏳ Futuro |
 | 5 — Commands | Executar comandos do sistema com whitelist segura | ⏳ Futuro |

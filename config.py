@@ -173,6 +173,31 @@ WAKE_DIR = DATA_DIR / "wake"
 VOICE_DIR = DATA_DIR / "voice"
 RECENT_SESSIONS_ON_SPLASH = 3
 
+# Limpeza das sessões antigas, feita no arranque. Conversa guardada é dado do
+# usuário, então a política é conservadora nos dois eixos:
+#   - só apaga o que passou de SESSIONS_MAX_AGE_DAYS (0 = nunca apagar);
+#   - e nunca encosta nas SESSIONS_KEEP_MIN mais recentes, por mais velhas que
+#     sejam. Sem esse piso, voltar de três meses fora encontraria o histórico
+#     inteiro varrido — justamente quando ele é mais útil.
+# O que for removido é anunciado na tela; apagar em silêncio seria pior.
+SESSIONS_MAX_AGE_DAYS = 90
+SESSIONS_KEEP_MIN = 20
+
+# Quantas conversas o `/retomar` lista. Maior que o da splash: ali são as três
+# últimas como lembrete, aqui é uma lista para escolher.
+RESUME_LIST_LIMIT = 10
+
+# --- Preferências persistentes ---
+# O que você troca durante a conversa (/modelo, /think, /stt, /vad, /voz) é
+# lembrado para a próxima sessão em ~/.oraculo/prefs.json. Ver core/prefs.py
+# para a lista exata do que é gravado — e do que deliberadamente não é.
+#
+# Precedência: os valores deste arquivo são o padrão de fábrica; o prefs.json
+# só ganha chave quando VOCÊ troca algo em conversa, e aí ele vence. `/padroes`
+# mostra o que está guardado e `/padroes limpar` devolve o comando ao config.py.
+PREFS_ENABLED = True
+PREFS_FILE = DATA_DIR / "prefs.json"
+
 # --- Telemetria ---
 # Defaults False → custo zero (nada escrito nem impresso). Para desenvolvimento,
 # ligue TELEMETRY_CONSOLE para ver um resumo de 1 linha por turno.
@@ -267,6 +292,12 @@ TUI_SCROLL_LINES = 3
 # normalmente (a rolagem fica por conta de PgUp/PgDn). Alternável em tempo real
 # com F2 — não é preciso reiniciar para copiar um trecho.
 TUI_MOUSE = True
+
+# Ctrl+C ocioso: o primeiro limpa a caixa de entrada, e só o segundo encerra.
+# Segundos que o "armado" dura — passado esse tempo (ou ao digitar qualquer
+# coisa) o próximo Ctrl+C volta a ser o primeiro. Encerrar por engano no meio de
+# uma mensagem longa custa a mensagem inteira; pedir dois toques custa um toque.
+CTRL_C_EXIT_WINDOW = 5.0
 
 # Entrada: caixa com borda, histórico entre sessões e autocomplete dos /comandos.
 # Requer prompt_toolkit; sem ele (ou sem TTY) cai para um prompt simples do rich.

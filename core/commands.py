@@ -10,12 +10,15 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 `handle()` retorna True se o input era um comando (e portanto NÃO deve ir ao LLM).
 """
 
+import json
+import threading
+import time
 from pathlib import Path
 
 from rich.text import Text
 
 import config
-from core import llm as llm_mod, ui
+from core import history as history_mod, llm as llm_mod, prefs as prefs_mod, ui
 
 STT_ENGINES = ("whisper", "parakeet")
 
@@ -36,9 +39,18 @@ COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
     ("/stt", "<motor>", "lista ou troca o motor de transcrição"),
     ("/transcrever", "<arquivo>", "transcreve um áudio; --salvar grava um .md ao lado"),
     ("/modelo", "<nome>", "lista os modelos do Ollama ou troca o ativo"),
+    ("/retomar", "<n>", "continua uma conversa anterior de onde parou"),
+    ("/padroes", "", "mostra as preferências guardadas; 'limpar' esquece"),
     ("/limpar", "", "apaga a memória da conversa atual"),
     ("/sair", "", "encerra o Oráculo"),
 )
+
+# Comandos cujo argumento é um conjunto FECHADO e conhecido (nome de comando,
+# motor de STT, modelo do Ollama). É neles que o Enter pode escolher sozinho a
+# primeira sugestão — ver core/prompt.py. Caminho de arquivo fica de fora: lá o
+# que você digitou pode ser um caminho válido que por acaso é prefixo de outro,
+# e completar por conta própria mandaria o comando para o arquivo errado.
+COMANDOS_COM_OPCOES_FECHADAS = ("/stt", "/modelo", "/retomar")
 
 
 def _ajuda_text() -> str:
@@ -78,26 +90,151 @@ def _list_models() -> list[str]:
         return []
 
 
+# --- Cache dos modelos, para o autocomplete de /modelo ---------------------
+# O completer roda a cada tecla digitada. Uma chamada HTTP ali dentro travaria
+# a caixa de entrada por até 5 s no pior caso — e o Ollama nem sempre responde
+# rápido quando está carregando um modelo. Então o autocomplete lê SÓ este cache
+# e a busca acontece numa thread; enquanto ele estiver vazio o autocomplete
+# apenas não sugere nada, que é degradação aceitável.
+_MODELOS_TTL = 60.0
+_modelos: tuple[str, ...] = ()
+_modelos_em = 0.0
+_buscando = threading.Event()
+
+
+def _buscar_modelos() -> None:
+    global _modelos, _modelos_em
+    try:
+        lista = tuple(_list_models())
+        if lista:
+            # Lista vazia = Ollama fora do ar. Manter o cache anterior é melhor
+            # que apagar as sugestões por causa de um soluço da rede local.
+            _modelos = lista
+    finally:
+        _modelos_em = time.monotonic()
+        _buscando.clear()
+
+
+def prefetch_modelos() -> None:
+    """Dispara a busca dos modelos em segundo plano. Nunca bloqueia.
+
+    Chamado no arranque (o cache já está quente quando você digita `/modelo `)
+    e depois de listar/trocar o modelo.
+    """
+    if _buscando.is_set():
+        return
+    _buscando.set()
+    threading.Thread(target=_buscar_modelos, daemon=True,
+                     name="oraculo-modelos").start()
+
+
+def modelos_conhecidos() -> tuple[str, ...]:
+    """Modelos do cache, para o autocomplete. Nunca bloqueia; pode vir vazio."""
+    if time.monotonic() - _modelos_em > _MODELOS_TTL:
+        prefetch_modelos()
+    return _modelos
+
+
+# --- Cache das sessões, para o autocomplete de /retomar --------------------
+# `load_recent` abre e parseia um JSON por sessão, e um JSON de conversa longa
+# passa fácil de centenas de KB. Reler os dez a cada tecla digitada seria
+# megabytes por caractere; com o cache curto, no máximo uma releitura por
+# dezena de segundos — e a lista de conversas antigas não muda enquanto você
+# digita o número.
+_SESSOES_TTL = 15.0
+_sessoes: list[dict] = []
+_sessoes_em = 0.0
+
+
+def sessoes_recentes() -> list[dict]:
+    """Sessões retomáveis, para o autocomplete. Cache de alguns segundos."""
+    global _sessoes, _sessoes_em
+    agora = time.monotonic()
+    if agora - _sessoes_em > _SESSOES_TTL:
+        _sessoes = history_mod.load_recent(limit=config.RESUME_LIST_LIMIT)
+        _sessoes_em = agora
+    return _sessoes
+
+
+def invalidar_sessoes() -> None:
+    """Força a próxima leitura da lista (depois de retomar ou de limpar)."""
+    global _sessoes_em
+    _sessoes_em = 0.0
+
+
+def resumo_titulo(sessao: dict, largura: int = 44) -> str:
+    """Título de uma sessão encurtado para caber no menu de autocomplete."""
+    return _resumo(sessao.get("title", ""), largura)
+
+
+def _guardar_modelos(models: list[str]) -> None:
+    """Realimenta o cache do autocomplete com uma lista recém-buscada."""
+    global _modelos, _modelos_em
+    if models:
+        _modelos = tuple(models)
+    _modelos_em = time.monotonic()
+
+
+def _resolver_modelo(arg: str, console) -> str | None:
+    """Traduz o que foi digitado num nome de modelo real. None = não deu.
+
+    Aceita prefixo: `/modelo qwen2` acha `qwen2.5:7b` se ele for o único que
+    começa assim. Digitar o nome inteiro (com a tag) era uma exigência boba,
+    ainda mais com nomes como `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL`.
+
+    Recusar o desconhecido importa mais do que parece: o `ChatOllama` não valida
+    o nome na construção, então um modelo inexistente só falharia no meio do
+    turno seguinte — e, pior, teria sido gravado nas preferências, quebrando
+    todas as sessões futuras até alguém descobrir por quê.
+    """
+    modelos = modelos_conhecidos() or tuple(_list_models())
+    if not modelos:
+        # Ollama fora do ar: sem lista não dá para validar, e recusar aqui
+        # impediria de trocar de modelo justamente quando ele voltar.
+        return arg
+    if arg in modelos:
+        return arg
+    candidatos = [m for m in modelos if m.startswith(arg)]
+    if len(candidatos) == 1:
+        return candidatos[0]
+    if not candidatos:
+        ui.warn(console, f"Modelo desconhecido: {arg}")
+    else:
+        ui.warn(console, f"'{arg}' casa com {len(candidatos)} modelos: "
+                         f"{', '.join(candidatos)}")
+    ui.hint(console, f"Use [{config.UI_COLOR_PROMPT}]/modelo[/] para ver a lista.")
+    return None
+
+
 def _handle_modelo(arg: str, ctx: dict) -> None:
     console = ctx["console"]
     chain = ctx["chain"]
 
     if not arg:
+        # Aqui a chamada bloqueante é a certa: você pediu a lista e quer a de
+        # agora, não a que estava em cache. O resultado realimenta o cache do
+        # autocomplete de graça.
         models = _list_models()
         if not models:
             ui.warn(console, "Não consegui listar os modelos do Ollama.")
             return
+        _guardar_modelos(models)
         ui.heading(console, "Modelos disponíveis:")
         for m in models:
             mark = (f"  [{config.UI_COLOR_ACCENT}](atual)[/]"
                     if m == chain.model_name else "")
             console.print(f"    • [{config.UI_COLOR_BRIGHT}]{m}[/]{mark}")
         ui.hint(console, f"Use [{config.UI_COLOR_PROMPT}]/modelo <nome>[/] "
-                         f"para trocar.")
+                         f"para trocar — basta o começo do nome, e o Tab completa.")
         return
 
-    chain.set_model(arg)
-    ui.ok(console, f"Modelo trocado para {arg}.")
+    nome = _resolver_modelo(arg, console)
+    if nome is None:
+        return
+
+    chain.set_model(nome)
+    prefs_mod.gravar(modelo=nome)
+    ui.ok(console, f"Modelo trocado para {nome}.")
 
     # set_model preserva o reasoning; se o novo modelo não suporta thinking,
     # desliga para o próximo turno não falhar com erro 400.
@@ -105,6 +242,136 @@ def _handle_modelo(arg: str, ctx: dict) -> None:
         ctx["thinking"] = False
         chain.set_thinking(False)
         ui.warn(console, f"{arg} não suporta raciocínio — thinking desativado.")
+
+
+def _resumo(texto: str, largura: int = 68) -> str:
+    """Uma linha do conteúdo de uma mensagem, para a prévia da retomada."""
+    limpo = " ".join((texto or "").split())
+    return limpo if len(limpo) <= largura else limpo[: largura - 1].rstrip() + "…"
+
+
+def _previa_retomada(console, mensagens: list[dict]) -> None:
+    """Mostra o último par da conversa retomada, para você se situar.
+
+    Retomar sem ver onde parou é retomar no escuro: o título da sessão é a
+    primeira pergunta, que costuma ser justamente a parte de que você já lembra.
+    Vai como aparte (barra na margem), não como turno, porque isto não
+    aconteceu agora — é a conversa de ontem sendo lembrada.
+    """
+    from rich.console import Group
+
+    ultima_pergunta = next((m for m in reversed(mensagens)
+                            if m.get("role") == "user"), None)
+    ultima_resposta = next((m for m in reversed(mensagens)
+                            if m.get("role") == "assistant"), None)
+    if not ultima_pergunta and not ultima_resposta:
+        return
+
+    linhas = [Text("onde você parou", style=config.UI_COLOR_DIM)]
+    for msg, glifo in ((ultima_pergunta, config.UI_GLYPH_USER),
+                       (ultima_resposta, config.UI_GLYPH_ASSISTANT)):
+        if not msg:
+            continue
+        linha = Text(f"{glifo} ", style=config.UI_COLOR_FAINT)
+        linha.append(_resumo(msg.get("content", "")), style=config.UI_COLOR_SOFT)
+        linhas.append(linha)
+    console.print(ui.indent(ui.LeftRule(Group(*linhas))))
+
+
+def _handle_retomar(arg: str, ctx: dict) -> None:
+    """Continua uma conversa anterior de onde ela parou."""
+    console = ctx["console"]
+    # A MESMA lista que o autocomplete numerou. Se o comando relesse o disco por
+    # conta própria, uma sessão nova gravada no meio mudaria a ordem e o "3" que
+    # você viu no menu abriria outra conversa.
+    sessoes = sessoes_recentes()
+
+    if not sessoes:
+        ui.notice(console, "nenhuma conversa anterior para retomar.")
+        return
+
+    if not arg:
+        ui.heading(console, "Conversas anteriores:")
+        for i, s in enumerate(sessoes, 1):
+            console.print(
+                f"    [{config.UI_COLOR_PROMPT}]{i}.[/] "
+                f"[{config.UI_COLOR_BRIGHT}]{_resumo(s['title'], 56)}[/]"
+                f"  [{config.UI_COLOR_FAINT}]{s['ago']} · "
+                f"{s['messages']} mensagens[/]")
+        ui.hint(console, f"Use [{config.UI_COLOR_PROMPT}]/retomar <n>[/] "
+                         f"para continuar uma delas.")
+        return
+
+    try:
+        n = int(arg.strip())
+    except ValueError:
+        ui.warn(console, f"'{arg}' não é um número — use /retomar <n>.")
+        return
+    if not 1 <= n <= len(sessoes):
+        ui.warn(console, f"Escolha entre 1 e {len(sessoes)} "
+                         f"(veja a lista com /retomar).")
+        return
+
+    escolhida = sessoes[n - 1]
+    history = ctx.get("history")
+    chain = ctx.get("chain")
+    if history is None or chain is None:
+        ui.warn(console, "/retomar só funciona dentro do chat.")
+        return
+
+    try:
+        mensagens = history.retomar(escolhida["path"])
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        ui.error(console, f"Não consegui abrir a sessão: {exc}")
+        return
+
+    na_memoria = chain.memory.carregar(mensagens)
+    invalidar_sessoes()      # a partir daqui esta sessão é a mais recente
+    ui.ok(console, f'Retomando "{_resumo(escolhida["title"], 48)}" '
+                   f'— {escolhida["ago"]}.')
+    # A janela de contexto é menor que o arquivo, e dizer isso evita a surpresa
+    # de perguntar sobre o começo de uma conversa longa e não ser entendido.
+    if na_memoria < len(mensagens):
+        ui.notice(console, f"  {len(mensagens)} mensagens no arquivo; as "
+                           f"{na_memoria} últimas entraram na memória.")
+    _previa_retomada(console, mensagens)
+
+
+def _handle_padroes(arg: str, ctx: dict) -> None:
+    """Mostra (ou esquece) as preferências que sobrevivem entre sessões."""
+    console = ctx["console"]
+
+    if arg.strip().lower() in {"limpar", "esquecer", "apagar", "reset"}:
+        if prefs_mod.esquecer():
+            ui.ok(console, "Preferências esquecidas — na próxima sessão vale "
+                           "o que estiver no config.py.")
+        else:
+            ui.notice(console, "não havia preferências gravadas.")
+        return
+
+    guardadas = prefs_mod.carregar()
+    if not guardadas:
+        ui.notice(console, "nenhuma preferência guardada — valendo os padrões "
+                           "do config.py.")
+        ui.hint(console, "Troque algo com /modelo, /think, /stt, /vad ou /voz "
+                         "e eu lembro na próxima vez.")
+        return
+
+    ui.heading(console, "Preferências guardadas:")
+    for campo in prefs_mod.campos():
+        if campo not in guardadas:
+            continue
+        valor = guardadas[campo]
+        if isinstance(valor, bool):
+            valor = "ligado" if valor else "desligado"
+        console.print(f"    [{config.UI_COLOR_PROMPT}]{campo}[/]"
+                      f"  [{config.UI_COLOR_BRIGHT}]{valor}[/]")
+    ui.hint(console, f"[{config.UI_COLOR_PROMPT}]/padroes limpar[/] esquece "
+                     f"tudo · {config.PREFS_FILE}")
+    # A escuta não entra na lista, e é melhor dizer isso do que deixar alguém
+    # concluir que ela ficou ligada de ontem.
+    ui.notice(console, "  A escuta pela palavra \"Oráculo\" nunca é lembrada: "
+                       "microfone aberto é escolha de cada sessão.")
 
 
 def _handle_think(ctx: dict) -> None:
@@ -118,6 +385,7 @@ def _handle_think(ctx: dict) -> None:
 
     ctx["thinking"] = want
     chain.set_thinking(want)
+    prefs_mod.gravar(think=want)
     if want:
         ui.ok(console, "Raciocínio ativado — Ctrl+O mostra/oculta o texto.")
     else:
@@ -139,6 +407,7 @@ def _handle_vad(ctx: dict) -> None:
             return
 
     config.VAD_ENABLED = quer
+    prefs_mod.gravar(vad=quer)
     if quer:
         ui.ok(console, "VAD ativado — a gravação para sozinha quando você "
                        "parar de falar.")
@@ -225,6 +494,7 @@ def _handle_stt(arg: str, ctx: dict) -> None:
     from core import stt
 
     config.STT_ENGINE = arg
+    prefs_mod.gravar(stt=arg)
     ui.ok(console, f"Motor de STT trocado para {arg}.")
     if not stt.available():
         ui.warn(console, f"Dependências de '{arg}' não instaladas — a transcrição "
@@ -376,8 +646,17 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/voz":
         ctx["voice_mode"] = not ctx["voice_mode"]
+        prefs_mod.gravar(voz=ctx["voice_mode"])
         estado = "ativado" if ctx["voice_mode"] else "desativado"
         ui.ok(console, f"Modo voz {estado}.")
+        return True
+
+    if cmd == "/retomar":
+        _handle_retomar(arg, ctx)
+        return True
+
+    if cmd in {"/padroes", "/padrões"}:
+        _handle_padroes(arg, ctx)
         return True
 
     if cmd == "/vad":

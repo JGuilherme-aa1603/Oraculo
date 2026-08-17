@@ -42,5 +42,34 @@ class ConversationMemory:
             remove = excess + (excess % 2)  # arredonda para cima até um número par
             self._history.messages = msgs[remove:]
 
+    def carregar(self, mensagens: list[dict]) -> int:
+        """Repõe a memória a partir de mensagens gravadas. Devolve quantas entraram.
+
+        Substitui o que havia — retomar uma conversa é trocar de assunto, não
+        emendar no que estava aberto.
+
+        As mensagens entram uma a uma, pelo mesmo caminho de uma conversa ao
+        vivo, então o `_trim` corta a janela em pares como sempre: de uma sessão
+        de 200 mensagens sobram as últimas `max_messages`, que é o que cabe no
+        contexto. O resto continua no arquivo, só não vai para o modelo.
+        """
+        self.clear()
+        entraram = 0
+        for m in mensagens:
+            if not isinstance(m, dict):
+                continue
+            conteudo = (m.get("content") or "").strip()
+            papel = m.get("role")
+            if not conteudo:
+                continue
+            if papel == "user":
+                self.add_user(conteudo)
+            elif papel == "assistant":
+                self.add_assistant(conteudo)
+            else:
+                continue
+            entraram += 1
+        return entraram
+
     def clear(self) -> None:
         self._history.clear()

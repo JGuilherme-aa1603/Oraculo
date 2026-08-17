@@ -22,9 +22,15 @@ desta camada para funcionar.
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Callable
+from pathlib import Path
 
 import config
+
+# Comandos cujo argumento é um caminho de arquivo. O Enter tem tratamento
+# próprio dentro deles: entrar numa pasta em vez de enviar.
+_ARGUMENTOS_DE_CAMINHO = ("/transcrever ", "/transcricao ")
 
 # Enter envia; Alt+Enter quebra linha. Ctrl+C/Ctrl+D seguem o contrato do loop
 # principal (interromper / encerrar), então são repassados como exceções.
@@ -72,14 +78,66 @@ def _precisa_argumento(texto: str) -> bool:
     return False
 
 
-def _build_completer():
-    """Autocomplete: /comandos no início da linha e caminhos para /transcrever."""
+def _escolhe_sozinho(texto: str) -> bool:
+    """True se o Enter pode aplicar a primeira sugestão sem você confirmar.
+
+    Vale para nome de comando e para os argumentos de conjunto fechado (motor de
+    STT, modelo do Ollama, número de sessão): ali as opções são todas conhecidas
+    e a primeira da lista é a que está na sua frente na tela.
+
+    **Não** vale para ARQUIVO. Um caminho que você digitou por inteiro pode ser
+    prefixo de outro (`/tmp/nota.ogg` e `/tmp/nota.ogg.bak`), e escolher sozinho
+    mandaria o comando para o arquivo errado — com o agravante de que
+    `/transcrever` gasta minutos antes de você perceber. Pasta é outra história e
+    tem caminho próprio (`_entra_na_pasta`): entrar numa pasta não decide nada,
+    só mostra o que tem dentro.
+    """
+    from core import commands as commands_mod
+
+    t = texto.lstrip()
+    if not t.startswith("/"):
+        return False
+    if " " not in t:
+        return True
+    return t.split(" ", 1)[0].lower() in commands_mod.COMANDOS_COM_OPCOES_FECHADAS
+
+
+def _argumento_de_caminho(texto: str) -> str | None:
+    """O trecho do texto que é um caminho de arquivo, ou None."""
+    for prefixo in _ARGUMENTOS_DE_CAMINHO:
+        if texto.startswith(prefixo):
+            return texto[len(prefixo):]
+    return None
+
+
+def _e_pasta(caminho: str) -> bool:
+    if not caminho.strip():
+        return False
+    try:
+        return Path(caminho.strip()).expanduser().is_dir()
+    except OSError:      # caminho absurdo, permissão, link quebrado
+        return False
+
+
+def _build_completer(status_fn):
+    """Autocomplete dos /comandos e dos seus argumentos.
+
+    `status_fn` é a mesma função que alimenta a barra de status; daqui ela serve
+    só para saber qual modelo está ativo e marcá-lo na lista.
+    """
+    import contextlib as _contextlib
+
     from prompt_toolkit.completion import Completer, Completion, PathCompleter
     from prompt_toolkit.document import Document
 
     from core import commands as commands_mod
 
     paths = PathCompleter(expanduser=True)
+
+    def _modelo_ativo() -> str:
+        with _contextlib.suppress(Exception):
+            return (status_fn() or {}).get("model", "") or ""
+        return ""
 
     class OraculoCompleter(Completer):
         def get_completions(self, document, complete_event):
@@ -96,6 +154,36 @@ def _build_completer():
                 for eng in commands_mod.STT_ENGINES:
                     if eng.startswith(parcial):
                         yield Completion(eng, start_position=-len(parcial))
+                return
+            # Argumento de /modelo → completa os modelos instalados no Ollama.
+            # A lista vem de um cache alimentado em segundo plano: uma consulta
+            # HTTP aqui travaria a caixa a cada tecla digitada.
+            if texto.startswith("/modelo "):
+                parcial = texto[len("/modelo "):].lstrip()
+                atual = _modelo_ativo()
+                for nome in commands_mod.modelos_conhecidos():
+                    if nome.startswith(parcial):
+                        yield Completion(
+                            nome,
+                            start_position=-len(parcial),
+                            display=nome,
+                            display_meta="em uso" if nome == atual else "",
+                        )
+                return
+            # Argumento de /retomar → os números da lista, com a conversa ao lado.
+            # Sem isto o número é um índice cego e você teria de rodar /retomar
+            # primeiro só para descobrir o que é o 3.
+            if texto.startswith("/retomar "):
+                parcial = texto[len("/retomar "):].lstrip()
+                for i, s in enumerate(commands_mod.sessoes_recentes(), 1):
+                    rotulo = str(i)
+                    if rotulo.startswith(parcial):
+                        yield Completion(
+                            rotulo,
+                            start_position=-len(parcial),
+                            display=f"{rotulo}. {commands_mod.resumo_titulo(s)}",
+                            display_meta=s.get("ago", ""),
+                        )
                 return
             # Início da linha → completa os comandos.
             if texto.startswith("/") and " " not in texto:
@@ -301,34 +389,164 @@ def build_editor(status_fn: Callable[[], dict],
     config.INPUT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     _trim_history()
 
+    completer = _build_completer(status_fn)
     buffer = Buffer(
         multiline=True,
         history=FileHistory(str(config.INPUT_HISTORY_FILE)),
-        completer=_build_completer(),
+        completer=completer,
         complete_while_typing=True,
     )
+
+    def _primeira_sugestao(buf):
+        """A primeira sugestão para o texto atual, calculada NA HORA.
+
+        Não dá para confiar no `complete_state` aqui: com
+        `complete_while_typing` o menu é preenchido de forma assíncrona, então
+        quem digita rápido — ou cola a linha inteira — chega no Enter antes de
+        existir sugestão nenhuma, e o comando abreviado seguia adiante como
+        "comando desconhecido". O sintoma dependia da velocidade de digitação,
+        que é o tipo de bug que não se reproduz quando se vai procurar.
+
+        Recalcular custa pouco: estes completers leem cache e listas em memória,
+        nunca a rede. O de caminho de arquivo, que toca o disco, nunca chega
+        aqui — `_escolhe_sozinho` o mantém de fora.
+        """
+        from prompt_toolkit.completion import CompleteEvent
+
+        for sugestao in completer.get_completions(buf.document, CompleteEvent()):
+            return sugestao
+        return None
+
+    def _destacar_primeira(_buf=None) -> None:
+        """Deixa a primeira sugestão já destacada assim que o menu abre.
+
+        Mexe SÓ no `complete_index`. O caminho normal de seleção do
+        prompt_toolkit é o `go_to_completion`, que além de destacar **reescreve
+        o texto do buffer** com a sugestão — e aí digitar `/` viraria `/ajuda`
+        na caixa, e a próxima tecla sairia como `/ajudat`. Como
+        `current_completion` é derivado do índice, atribuí-lo direto destaca sem
+        encostar no documento.
+
+        Com a primeira já destacada, a seta para baixo vai para a **segunda**,
+        que é o comportamento esperado de um menu que já mostra uma escolha
+        feita. Quem aplica a primeira é o Enter (ou o Tab).
+        """
+        estado = buffer.complete_state
+        if (estado is not None and estado.complete_index is None
+                and estado.completions):
+            estado.complete_index = 0
+
+    buffer.on_completions_changed += _destacar_primeira
+
+    def _destaque_nao_aplicado(buf) -> bool:
+        """True se há sugestão destacada mas o texto ainda é o que você digitou.
+
+        É o estado que `_destacar_primeira` cria e que não existe no
+        prompt_toolkit padrão, onde destacar e inserir andam juntos.
+        """
+        estado = buf.complete_state
+        return (estado is not None and estado.current_completion is not None
+                and buf.text == estado.original_document.text)
+
+    def _enter_no_caminho(buf) -> bool:
+        """Enter dentro de um argumento de caminho — navegar pastas com Enter.
+
+        A sugestão em foco (a destacada, ou a primeira) é aplicada e então:
+
+        - **pasta** → ganha a barra e o menu reabre com o conteúdo dela. Nada é
+          enviado: descer um nível não decide nada, só mostra o que tem dentro.
+          É o que faz escolher um áudio virar navegação em vez de digitar o
+          caminho inteiro de cabeça.
+        - **arquivo** → o nome fica completo na caixa e o Enter segue para o
+          envio, que é o que você queria ao apontar para ele.
+
+        Escolher o arquivo em foco é seguro aqui porque ele está **destacado na
+        tela**: você vê o que vai ser escolhido antes de confirmar. E o
+        `PathCompleter` ordena por nome, então um `nota.ogg` digitado inteiro vem
+        antes do `nota.ogg.bak` — o casamento exato nunca perde para uma extensão
+        a mais.
+
+        Devolve True quando tratou tudo (e aí não se envia nada).
+
+        Detalhe que custou uma iteração: o `PathCompleter` põe a barra final da
+        pasta só no `display`, nunca no texto da sugestão. Sem acrescentá-la
+        aqui, o menu não reabre e a navegação para na primeira pasta.
+        """
+        arg = _argumento_de_caminho(buf.text)
+        if arg is None:
+            return False
+
+        # Sem nada digitado não há a que apontar: deixa o comando seguir e
+        # mostrar o próprio modo de usar, em vez de fisgar um arquivo qualquer
+        # do diretório atual.
+        if arg.strip():
+            if _destaque_nao_aplicado(buf):
+                sugestao = buf.complete_state.current_completion
+            elif buf.complete_state is not None:
+                sugestao = None     # navegou com a seta: o texto já está aqui
+            else:
+                sugestao = _primeira_sugestao(buf)
+            if sugestao is not None:
+                buf.complete_state = None
+                buf.apply_completion(sugestao)
+                arg = _argumento_de_caminho(buf.text) or ""
+
+        if not _e_pasta(arg):
+            return False            # arquivo (ou caminho livre): segue e envia
+        if not arg.endswith("/"):
+            buf.insert_text("/")
+        buf.start_completion()
+        return True
 
     kb = KeyBindings()
 
     @kb.add("enter")
     def _enviar(event) -> None:
         buf = event.app.current_buffer
+
+        # Caminho de arquivo tem regra própria: pasta se entra, não se envia.
+        if _enter_no_caminho(buf):
+            return
+
         estado = buf.complete_state
-        if estado is not None:
-            if estado.current_completion is not None:
-                # Escolhido com Tab/setas: o texto já está no buffer. Fecha o
-                # menu zerando o estado — `cancel_completion()` NÃO serve aqui,
-                # ele faz go_to_completion(None) e desfaz o que o Tab inseriu.
+        if (estado is not None and estado.current_completion is not None
+                and not _destaque_nao_aplicado(buf)):
+            # Escolhido com Tab/setas: o texto já está no buffer. Fecha o menu
+            # zerando o estado — `cancel_completion()` NÃO serve aqui, ele faz
+            # go_to_completion(None) e desfaz o que o Tab inseriu.
+            buf.complete_state = None
+        elif _escolhe_sozinho(buf.text):
+            # Nada escolhido à mão: o Enter fica com a PRIMEIRA sugestão, que é
+            # a que está no topo do menu, à sua frente. Antes isso só valia
+            # quando havia exatamente uma opção; com duas era preciso descer com
+            # a seta só para confirmar o que já estava visível.
+            sugestao = _primeira_sugestao(buf)
+            if sugestao is not None:
+                # Zerado ANTES do apply: com o estado montado, `apply_completion`
+                # começa por um `go_to_completion(None)` que devolve o documento
+                # ao original — e a posição da nossa sugestão foi medida no
+                # documento de agora.
                 buf.complete_state = None
-            elif (buf.text.startswith("/") and " " not in buf.text
-                    and len(estado.completions) == 1):
-                # Comando incompleto com uma única saída: Enter completa.
-                buf.apply_completion(estado.completions[0])
-                if _precisa_argumento(buf.text):
-                    # Ainda falta o argumento (ex.: /transcrever <arquivo>):
-                    # abre espaço e espera — o próximo Enter é que envia.
+                antes = buf.text
+                buf.apply_completion(sugestao)
+                if buf.text != antes and _precisa_argumento(buf.text):
+                    # Expandimos uma abreviação para um comando que espera
+                    # argumento (`/tra` → `/transcrever`): abre espaço e espera
+                    # — o próximo Enter é que envia.
+                    #
+                    # A comparação com o texto anterior é o que separa os dois
+                    # casos. Quem digitou `/modelo` inteiro e apertou Enter quer
+                    # RODAR o comando (que sem argumento lista os modelos), e
+                    # antes precisava de dois Enters para isso: o primeiro só
+                    # inseria um espaço.
                     buf.insert_text(" ")
                     return
+        # O histórico é gravado AQUI porque este Enter substitui o
+        # `validate_and_handle()` do prompt_toolkit, que é quem normalmente
+        # chamaria isto. Sem a chamada, `~/.oraculo/input_history` nunca era
+        # criado e a seta para cima percorria um histórico vazio — a caixa
+        # tinha um `FileHistory` configurado desde sempre, só nunca escrito.
+        buf.append_to_history()
         on_submit(buf.text)
 
     @kb.add("escape", "enter")     # Alt+Enter
@@ -355,10 +573,16 @@ def build_editor(status_fn: Callable[[], dict],
     @kb.add("tab")
     def _proxima_sugestao(event) -> None:
         buf = event.app.current_buffer
-        if buf.complete_state:
-            buf.complete_next()
-        else:
+        if not buf.complete_state:
             buf.start_completion(select_first=True)
+            return
+        if _destaque_nao_aplicado(buf):
+            # A primeira já está destacada mas ainda não foi escrita na caixa:
+            # o Tab escreve. Sem isto ele pularia para a segunda e a primeira
+            # ficaria inalcançável pelo Tab.
+            buf.go_to_completion(buf.complete_state.complete_index)
+            return
+        buf.complete_next()
 
     @kb.add("s-tab")
     def _sugestao_anterior(event) -> None:
@@ -448,8 +672,23 @@ class InputBox:
         from prompt_toolkit.application import Application
         from prompt_toolkit.layout import Layout
 
-        editor = build_editor(self._status_fn, on_submit=self._submit)
+        # Instante do último Ctrl+C ocioso. Numa lista para o closure poder
+        # escrever nela sem `nonlocal` espalhado pelos handlers.
+        armado = [0.0]
+
+        def _saida_armada() -> bool:
+            return time.monotonic() - armado[0] < config.CTRL_C_EXIT_WINDOW
+
+        def _status_com_saida() -> dict:
+            estado = dict(self._status_fn())
+            if _saida_armada():
+                estado["state"] = "Ctrl+C de novo encerra"
+                estado["hint"] = "qualquer tecla cancela"
+            return estado
+
+        editor = build_editor(_status_com_saida, on_submit=self._submit)
         self._buffer = editor["buffer"]
+        self._buffer.on_text_changed += lambda _b: armado.__setitem__(0, 0.0)
 
         # Ctrl+C/Ctrl+D ficam fora da fábrica: aqui eles encerram a Application
         # da vez (um turno de leitura), enquanto no modo fullscreen precisam
@@ -458,7 +697,18 @@ class InputBox:
 
         @kb.add("c-c")
         def _interromper(event) -> None:
-            event.app.exit(exception=KeyboardInterrupt, style="class:aborting")
+            # O primeiro Ctrl+C limpa a caixa; só o segundo encerra. Mesmo
+            # contrato do modo tela cheia (ver core/tui.py).
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.reset()
+                armado[0] = time.monotonic()
+                return
+            if _saida_armada():
+                event.app.exit(exception=KeyboardInterrupt,
+                               style="class:aborting")
+            else:
+                armado[0] = time.monotonic()
 
         @kb.add("c-d")
         def _encerrar(event) -> None:

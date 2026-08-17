@@ -56,7 +56,8 @@ oraculo/
     ├── memory.py    # memória de sessão (janela deslizante, cortada em pares)
     ├── chain.py     # pipeline prompt | llm; emite eventos think/answer
     ├── commands.py  # roteamento de comandos (/ajuda, /voz, /think, /stt, /modelo...)
-    ├── history.py   # persistência de sessões em JSON (~/.oraculo/sessions)
+    ├── history.py   # persistência de sessões em JSON (~/.oraculo/sessions) + /retomar
+    ├── prefs.py     # preferências que sobrevivem à sessão (~/.oraculo/prefs.json)
     ├── stt.py       # áudio → texto (faster-whisper na GPU | parakeet na CPU)
     ├── vad.py       # detecção de atividade de voz (Silero v6, streaming frame a frame)
     ├── wake.py      # palavra de despertar: mel + embedding (openWakeWord) + cabeça .npz
@@ -190,6 +191,62 @@ Regras de código:
 - **Áudio de sala é o melhor teste de falso positivo que existe aqui.** 90 s de vídeo
   falando em português, com o detector escutando, sem um disparo — vale mais que qualquer
   negativo sintetizado.
+
+**Sessões e preferências (`core/history.py`, `core/prefs.py`).**
+
+- **`/retomar` continua o MESMO arquivo**, não abre outro: partir a conversa em dois deixa
+  dois registros pela metade na lista de recentes, cada um parecendo ter morrido cedo.
+- **O nome do arquivo de sessão precisava ser único.** O carimbo tem resolução de segundo,
+  então duas sessões abertas no mesmo segundo (fechar e reabrir, dois terminais) caíam no
+  mesmo arquivo e a segunda apagava a primeira em silêncio. Passava despercebido enquanto
+  a sessão era só enfeite da splash; com o `/retomar` virou perda de dado.
+- **A lista numerada do `/retomar` e a do autocomplete têm que sair do MESMO cache**
+  (`commands.sessoes_recentes`). Reler o disco em cada lugar faria o "3" que você viu no
+  menu abrir outra conversa se uma sessão fosse gravada no meio.
+- **Preferência nasce só quando o usuário troca algo.** Um `prefs.json` vazio deixa o
+  `config.py` mandar; se gravássemos tudo no primeiro arranque, editar o config depois não
+  teria efeito nenhum e a causa seria invisível. `/padroes limpar` é a saída.
+- **A wake word NUNCA é persistida**, e isso é decisão, não esquecimento: o projeto tem
+  escrito que microfone aberto "é uma escolha do usuário, nunca um padrão herdado", e
+  herdar por arquivo é herdar. Ver a nota no topo de `core/prefs.py`.
+- **`/modelo` valida o nome antes de trocar e gravar.** O `ChatOllama` não valida na
+  construção, então um modelo inexistente só falharia no meio do turno seguinte — e teria
+  ido para as preferências, quebrando todas as sessões futuras. Aceita prefixo único.
+- **A faxina de sessões tem duas travas**: idade (`SESSIONS_MAX_AGE_DAYS`, 0 desliga) e um
+  piso de `SESSIONS_KEEP_MIN` mais recentes que ficam sempre. Sem o piso, voltar de três
+  meses fora encontraria o histórico varrido. O que sai é anunciado — apagar conversa em
+  silêncio seria pior.
+
+**Autocomplete (`core/prompt.py`) — o Enter faz mais do que enviar.**
+
+- **A primeira sugestão vem destacada, mexendo SÓ no `complete_index`.** O caminho normal
+  do prompt_toolkit é `go_to_completion`, que além de destacar reescreve o texto do buffer:
+  digitar `/` viraria `/ajuda` na caixa e a tecla seguinte sairia como `/ajudat`. Como
+  `current_completion` é derivado do índice, atribuí-lo direto destaca sem tocar no
+  documento. Isso cria um estado que o prompt_toolkit não tem — destacado mas não aplicado
+  — e é por isso que existe `_destaque_nao_aplicado()`: Enter e Tab precisam distinguir
+  "você escolheu com a seta" de "eu destaquei para você".
+- **Não dá para confiar no `complete_state` no Enter.** Com `complete_while_typing` o menu
+  é preenchido de forma assíncrona: quem digita rápido, ou cola a linha, chega no Enter
+  antes de existir sugestão. Daí `_primeira_sugestao()` recalcular na hora — o sintoma
+  dependia da velocidade de digitação, que é o tipo de bug que some quando se vai procurar.
+- **Expandir abreviação ≠ digitar o comando inteiro.** Só quando o Enter *mudou* o texto é
+  que ele abre espaço e espera o argumento; `/modelo` digitado por inteiro executa e lista.
+  Antes eram dois Enters para isso.
+- **Pasta se entra, arquivo se escolhe.** No argumento de caminho o Enter aplica a sugestão
+  em foco: pasta ganha barra e o menu reabre com o conteúdo (não envia nada); arquivo
+  completa e envia. Escolher arquivo só é seguro porque ele está **destacado na tela**. E o
+  `PathCompleter` põe a barra final só no `display`, nunca no texto — sem acrescentá-la, o
+  menu não reabre e a navegação para na primeira pasta.
+- **O histórico só existe porque o Enter o grava.** Este Enter substitui o
+  `validate_and_handle()` do prompt_toolkit, que é quem normalmente chama
+  `append_to_history()`. Sem a chamada, `~/.oraculo/input_history` nunca era criado e a
+  seta para cima percorria um histórico vazio — a caixa tinha `FileHistory` configurado
+  desde sempre, só nunca escrito.
+- **Ctrl+C ocioso limpa a caixa; só o segundo encerra** (`CTRL_C_EXIT_WINDOW`). O reflexo
+  vindo do shell é usar Ctrl+C para apagar a linha, e isso fechava o Oráculo levando a
+  mensagem junto. Digitar qualquer coisa cancela o armado, e a barra de status diz que o
+  próximo toque encerra. Durante a geração e durante a escuta o Ctrl+C não muda de sentido.
 
 ## Invariantes que NÃO devem regredir
 

@@ -130,6 +130,25 @@ def _thinking_view(show: bool, reasoning: str, since: float):
     return ui.Waiting("Pensando...", "Ctrl+O mostra o raciocínio", since=since)
 
 
+def _thinking_block(reasoning: str, segundos: float):
+    """O raciocínio que FICA no transcript, gravado junto com a resposta.
+
+    O preview ao vivo é transitório por construção: ele vive dentro do Live e
+    some quando o raciocínio acaba. Quem ligou o Ctrl+O quer ler aquilo com
+    calma, e não só de relance enquanto passa — então, com a exibição ligada, o
+    raciocínio é reimpresso acima da resposta e fica.
+
+    Duas diferenças em relação ao preview: sem a dica de tecla (aqui não há mais
+    nada a ocultar) e sem o corte de 1200 caracteres, porque o transcript rola e
+    o texto inteiro é justamente o que se quis ver.
+    """
+    cabecalho = Text("raciocínio", style=config.UI_COLOR_DIM)
+    if segundos:
+        cabecalho.append(f"  · {segundos:.1f}s", style=config.UI_COLOR_FAINT)
+    corpo = Text(reasoning, style=f"italic {config.UI_COLOR_FAINT}")
+    return ui.indent(ui.LeftRule(Group(cabecalho, corpo)))
+
+
 def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exception | None:
     """Aguarda a fala terminar permitindo barge-in: Esc interrompe na hora e
     devolve o controle para a próxima mensagem. Sem TTY, só aguarda o fim."""
@@ -525,6 +544,7 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
             reasoning: list[str] = []
             got_output = False
             answering = False
+            pensou_s = 0.0               # quanto durou a fase de raciocínio
             # Preview ao vivo enquanto a resposta chega, depois render final.
             # transient=True + vertical_overflow="crop": o Live mostra só a
             # última tela e redesenha NO LUGAR (sem isso, resposta mais alta que
@@ -565,6 +585,7 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                     # resposta
                     if not answering:
                         answering = True
+                        pensou_s = now - turno_t0
                         last_render = 0.0           # força limpar o raciocínio e renderizar
                     chunks.append(text)
                     if speaker:
@@ -573,7 +594,18 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                         live.update(ui.body_view(Markdown("".join(chunks))))
                         last_render = now
             response = "".join(chunks)
+            # Só agora, fora do Live: no modo tela cheia o preview é o ÚLTIMO
+            # bloco do transcript e o `live.update` seguinte o substituiria —
+            # imprimir aqui dentro faria o raciocínio ser sobrescrito pela
+            # resposta em vez de ficar acima dela.
+            pensamento = "".join(reasoning).strip()
+            if pensamento and ctx.get("show_thinking"):
+                console.print(_thinking_block(pensamento, pensou_s))
+                ui.spacer(console)
             ui.body(console, Markdown(response))
+            # O raciocínio não vai para a memória: ele é andaime do turno, não
+            # parte do que foi dito. Gravá-lo empurraria a janela de contexto
+            # para fora com texto que o modelo não deve reler.
             history.record("assistant", response)
             tel.set_llm(**chain.last_usage)
         except KeyboardInterrupt:

@@ -242,6 +242,17 @@ Quando os comandos de sistema forem implementados:
   chegou. Recuar pela calha inteira jogava o olho quatro colunas à direita do ponto e a coluna
   do turno parecia torta.
 
+**Raciocínio que fica.** O preview do Ctrl+O vive dentro do Live e é transitório por
+construção. Com a exibição ligada, o raciocínio é **reimpresso** acima da resposta
+(`main._thinking_block`) e permanece no transcript, com a duração da fase. Duas coisas que
+o lugar da impressão decide:
+
+- Tem que ser **fora do `with live_factory()`**. No fullscreen o preview é o último bloco do
+  transcript e o `live.update` seguinte o substituiria — imprimir lá dentro faz o raciocínio
+  ser sobrescrito pela resposta em vez de ficar acima dela.
+- O raciocínio **não** vai para `history` nem para a memória: é andaime do turno, e gravá-lo
+  empurraria a janela de contexto para fora com texto que o modelo não deve reler.
+
 **Título da janela (`core/title.py`).** O olho também vai para a aba e para a barra de
 tarefas (`(✦) Oráculo · pensando`), girando enquanto o Oráculo trabalha — é o estado dele
 visto de fora da janela. Duas regras:

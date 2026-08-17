@@ -232,10 +232,10 @@ Quando os comandos de sistema forem implementados:
   ele pensa, fala ou transcreve, e registrada como spinner do rich (`ui.IRIS`) para o
   `console.status`. `ui.Waiting` recalcula quadro e contador a cada renderização, sem thread
   e sem estado de animação guardado.
-- **Símbolo "grande" no terminal só existe em várias linhas.** Não há corpo de fonte, só
-  células. O olho da splash usa as peças de parêntese grande (U+239B-23A0) empilhadas em três
-  linhas em volta da íris. As três linhas precisam ter a **mesma largura em células**, senão a
-  coluna centralizada da splash desloca uma delas e a pupila sai do eixo.
+- Na splash o olho é `( ✦ )`, numa linha só. Já teve três, com as peças de parêntese grande
+  (U+239B-23A0) empilhadas — num terminal não há corpo de fonte, então símbolo grande só
+  existe ocupando várias linhas. Ficou pesado para o que é: uma marca de identidade no meio
+  da coluna, não o assunto da tela.
 - **A linha de espera se ancora na grade do turno, não na calha.** A íris cai na coluna do `●`
   (`ui._COL_GLIFO`) e o rótulo na coluna do corpo — ela ocupa o lugar da resposta que ainda não
   chegou. Recuar pela calha inteira jogava o olho quatro colunas à direita do ponto e a coluna

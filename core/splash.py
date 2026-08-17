@@ -54,31 +54,19 @@ def _join(lines: list[Text]) -> Text:
     return out
 
 
-# Parênteses de três linhas (peças de parêntese grande, U+239B-23A0). No design
-# o olho tem 60px — quatro vezes a altura do texto — e num terminal não existe
-# corpo de fonte, só células: a única forma de um símbolo ficar grande é ocupar
-# mais de uma linha. As peças foram feitas para empilhar, então as três linhas
-# leem como um par de parênteses alto em volta da íris.
-#
-# Todas as linhas precisam ter a MESMA largura em células, senão a coluna
-# centralizada da splash desloca uma delas e a pupila sai do eixo.
-_OLHO = ("⎛     ⎞",
-         "⎜  {}  ⎟",
-         "⎝     ⎠")
+def _iris_line() -> Text:
+    """O olho: a íris em ciano entre parênteses roxos, numa linha só.
 
-
-def _iris_block() -> list[Text]:
-    """O olho: a íris em ciano dentro de parênteses roxos altos."""
-    linhas: list[Text] = []
-    for modelo in _OLHO:
-        line = Text()
-        antes, _, depois = modelo.partition("{}")
-        line.append(antes, style=f"bold {config.UI_COLOR_PROMPT}")
-        if depois:
-            line.append(_IRIS, style=f"bold {config.UI_COLOR_ACCENT}")
-            line.append(depois, style=f"bold {config.UI_COLOR_PROMPT}")
-        linhas.append(line)
-    return linhas
+    O design pede 60px, e num terminal não há corpo de fonte — símbolo grande
+    só existe ocupando várias linhas. Chegou a ter três, com as peças de
+    parêntese grande (U+239B-23A0) empilhadas, e ficou pesado demais para o que
+    é: uma marca de identidade no meio da coluna, não o assunto da tela.
+    """
+    line = Text()
+    line.append("( ", style=f"bold {config.UI_COLOR_PROMPT}")
+    line.append(_IRIS, style=f"bold {config.UI_COLOR_ACCENT}")
+    line.append(" )", style=f"bold {config.UI_COLOR_PROMPT}")
+    return line
 
 
 def _identity(model: str, memory_active: bool) -> list[Text]:
@@ -89,7 +77,7 @@ def _identity(model: str, memory_active: bool) -> list[Text]:
         Text(""),
         Text(f"Bem-vindo, {_user_name()}!", style=f"bold {config.UI_COLOR_BRIGHT}"),
         Text(""),
-        *_iris_block(),
+        _iris_line(),
         Text(""),
         modelo,
         Text(f"memória {memoria} · {config.DEVICE_LABEL}",

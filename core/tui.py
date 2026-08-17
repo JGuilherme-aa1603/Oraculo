@@ -849,7 +849,15 @@ def run(loop: Callable[[FullscreenSession], None],
     `loop` é o laço de conversa; recebe a sessão e roda numa thread própria,
     porque a thread principal fica com a Application desenhando a tela.
     """
+    from core import title
+
     sessao = FullscreenSession(status_fn)
+
+    # O título é escrito no repaint, e não pela thread do laço: aqui o stdout é
+    # do prompt_toolkit, então emitir a sequência de fora interleava com o
+    # desenho da tela. `before_render` roda na thread certa e já vem com o
+    # ritmo do `refresh_interval`, que é o mesmo da íris.
+    sessao.app.before_render += lambda _app: title.desenhar()
 
     def _worker() -> None:
         try:
@@ -859,9 +867,11 @@ def run(loop: Callable[[FullscreenSession], None],
 
     t = threading.Thread(target=_worker, daemon=True, name="oraculo-loop")
     t.start()
+    title.abrir()
     try:
         sessao.app.run()
     finally:
         sessao._encerrando.set()
         sessao._fila.put(None)
         t.join(timeout=2.0)
+        title.fechar()

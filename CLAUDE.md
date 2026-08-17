@@ -67,6 +67,7 @@ oraculo/
     ├── audio.py     # captura de microfone + reprodução
     ├── keyboard.py  # monitor de tecla no terminal (Esc = barge-in, Ctrl+O = thinking)
     ├── telemetry.py # latência por estágio + tokens/s (opt-in, custo zero desligada)
+    ├── title.py     # título da janela: o olho na aba/barra de tarefas
     ├── ui.py        # calha do transcript + paleta aplicada (tema, íris, avisos)
     ├── prompt.py    # caixa de entrada (prompt_toolkit): borda, histórico, autocomplete
     ├── tui.py       # modo tela cheia: transcript rolável + caixa fixa no rodapé
@@ -240,6 +241,21 @@ Quando os comandos de sistema forem implementados:
   (`ui._COL_GLIFO`) e o rótulo na coluna do corpo — ela ocupa o lugar da resposta que ainda não
   chegou. Recuar pela calha inteira jogava o olho quatro colunas à direita do ponto e a coluna
   do turno parecia torta.
+
+**Título da janela (`core/title.py`).** O olho também vai para a aba e para a barra de
+tarefas (`(✦) Oráculo · pensando`), girando enquanto o Oráculo trabalha — é o estado dele
+visto de fora da janela. Duas regras:
+
+- **Quem emite os bytes é a thread dona do stdout.** `marcar()` só anota o estado e é
+  seguro em qualquer thread; `desenhar()` escreve. No fullscreen quem chama é o gancho
+  `before_render` da app (`core/tui.py`), que roda na thread certa e já vem no ritmo do
+  `refresh_interval`; no inline é a própria thread do laço, e **só nos limites do turno** —
+  uma sequência OSC caindo dentro de um quadro do `rich.Live`, que repinta de outra thread,
+  sai como lixo na tela. Por isso o olho não gira no inline: lá ele muda de estado, não de
+  quadro. O laço nunca escreve direto; recebe `tick_title` injetado, como os outros
+  ganchos por modo.
+- **O título anterior volta.** `abrir()` empurra na pilha do terminal (CSI 22 t) e
+  `fechar()` restaura (CSI 23 t). Sem isso a aba fica marcada "Oráculo" para sempre.
 
 **A íris custou dois bugs, os dois silenciosos. Valem para qualquer glifo ou animação nova.**
 

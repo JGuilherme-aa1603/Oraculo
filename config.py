@@ -249,6 +249,12 @@ UI_SHOW_TURN_METRICS = True
 # Sem TTY ou sem prompt_toolkit, cai para "inline" automaticamente.
 TUI_MODE = "fullscreen"
 
+# Título da janela do terminal. Ligado, o olho vai para a aba e para a barra de
+# tarefas e gira enquanto o Oráculo trabalha — é o estado visível de fora da
+# janela. O título anterior é empurrado na pilha do terminal e restaurado ao
+# sair. Desligado, nada é escrito (invariante do custo zero). Ver core/title.py.
+TITLE_ENABLED = True
+
 # Só vale no modo "inline": limpa a tela visível ao abrir (preserva o scrollback
 # anterior — nunca usar 3J aqui, destruiria o histórico do terminal de quem chamou).
 CLEAR_ON_START = True

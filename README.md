@@ -314,6 +314,7 @@ oraculo/
 │   ├── audio.py     # Captura de microfone (push-to-talk e VAD) + reprodução
 │   ├── keyboard.py  # Monitor de tecla no terminal (barge-in por Esc)
 │   ├── telemetry.py # Latência por estágio + tokens/s (opt-in)
+│   ├── title.py     # Título da janela: o olho na aba e na barra de tarefas
 │   ├── ui.py        # Calha do transcript (eco, cabeçalho, corpo, rodapé)
 │   ├── prompt.py    # Caixa de entrada: borda, histórico e autocomplete
 │   ├── tui.py       # Modo tela cheia: transcript rolável + caixa fixa no rodapé
@@ -338,7 +339,12 @@ modelo de STT (`STT_ENGINE`, `WHISPER_MODEL`), motor e voz de TTS (`TTS_ENGINE`,
 A aparência do terminal fica no bloco **Interface do terminal**: `UI_MAX_WIDTH` (teto da
 coluna de leitura; `0` usa o terminal inteiro), `UI_GUTTER` (recuo do corpo), os glifos,
 `UI_SHOW_TURN_METRICS` (rodapé com as métricas do turno), `CLEAR_ON_START` (limpar a
-tela ao abrir) e `INPUT_RICH_EDITOR`.
+tela ao abrir), `TITLE_ENABLED` (o olho no título da janela) e `INPUT_RICH_EDITOR`.
+
+Com `TITLE_ENABLED`, a aba e a barra de tarefas mostram `(✦) Oráculo`, com o estado ao lado
+(`· pensando`, `· ouvindo`, `· falando`) e a íris girando enquanto ele trabalha — dá para
+saber que a resposta ainda está vindo sem trazer o terminal para a frente. O título que o
+terminal tinha antes é restaurado ao sair.
 
 A paleta são os `UI_COLOR_*`, em hexadecimal: ciano (`ACCENT`, o Oráculo e os títulos),
 roxo (`PROMPT`, o `>` e os comandos), verde (`BORDER`, molduras e divisores), três tons

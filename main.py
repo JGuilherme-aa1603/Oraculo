@@ -26,6 +26,7 @@ from core import (
     prompt as prompt_mod,
     speaker as speaker_mod,
     telemetry,
+    title as title_mod,
     tui,
     ui,
 )
@@ -143,6 +144,7 @@ def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exceptio
         interrupted.set()
         speaker.stop()
 
+    title_mod.marcar("falando")
     with keyboard.watch_key(keyboard.ESC, _on_esc):
         err = speaker.close()
     if interrupted.is_set():
@@ -189,6 +191,9 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
     console = ctx["console"]
     ctx["last_stt_seconds"] = None
     usando_wake = config.WAKE_ENABLED and wake.disponivel()
+    # Microfone aberto tem que aparecer no título também: fora da janela é a
+    # única pista de que a sala está sendo ouvida.
+    title_mod.marcar("ouvindo")
 
     if not usando_wake:
         typed = ask(f"[{config.UI_COLOR_FAINT}][voz] Enter para falar "
@@ -416,8 +421,18 @@ def _run_inline(chain: OraculoChain) -> None:
                                       once=False, preserve_signals=True)
         return contextlib.nullcontext()
 
-    _chat_loop(chain, ctx, ask=lambda p="": box.ask(p), live_factory=_live,
-               echo=box.rich, watch_ctrl_o=_watch_ctrl_o)
+    # No inline o título é escrito pela própria thread do laço, e só nos limites
+    # do turno — nunca de dentro do Live. O rich repinta de uma thread própria,
+    # e uma sequência OSC caindo no meio de um quadro sai como lixo na tela. O
+    # preço é o olho não girar aqui: ele muda de estado, não de quadro. No
+    # fullscreen, que é o padrão, o gancho de repaint dá a animação completa.
+    title_mod.abrir()
+    try:
+        _chat_loop(chain, ctx, ask=lambda p="": box.ask(p), live_factory=_live,
+                   echo=box.rich, watch_ctrl_o=_watch_ctrl_o,
+                   tick_title=title_mod.desenhar)
+    finally:
+        title_mod.fechar()
 
 
 def _run_fullscreen(chain: OraculoChain) -> None:
@@ -448,18 +463,25 @@ def _run_fullscreen(chain: OraculoChain) -> None:
 
 def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                watch_ctrl_o, interrupt=None, wait_stop=None,
-               ask_nowait=None, escuta_ctx=None) -> None:
+               ask_nowait=None, escuta_ctx=None, tick_title=lambda: None) -> None:
     """Laço de turnos, compartilhado pelos dois modos de desenho.
 
     O que muda entre eles é injetado: de onde vem a mensagem (`ask`), o que
-    mostra o preview do streaming (`live_factory`), como o Ctrl+O é observado e
+    mostra o preview do streaming (`live_factory`), como o Ctrl+O é observado,
     como a interrupção chega (`interrupt`, um Event no modo tela cheia — lá o
-    KeyboardInterrupt não sobe pela thread do laço).
+    KeyboardInterrupt não sobe pela thread do laço) e quem escreve o título
+    (`tick_title`).
+
+    O laço só **marca** o estado do título; quem emite os bytes muda com o modo,
+    porque muda quem é dono do stdout. No fullscreen o `tick_title` é vazio e o
+    gancho de repaint faz o trabalho na thread certa (core/tui.py).
     """
     console = ctx["console"]
     history = history_mod.SessionHistory()
 
     while ctx["running"]:
+        title_mod.marcar()
+        tick_title()
         try:
             if ctx["voice_mode"]:
                 user_input = _listen(ctx, ask, wait_stop=wait_stop,
@@ -489,6 +511,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
         history.record("user", user_input)
         stt_seconds = ctx.pop("last_stt_seconds", None)
         ui.assistant_header(console)
+        title_mod.marcar("pensando" if ctx.get("thinking") else "gerando")
+        tick_title()
         # No modo voz, a fala é sintetizada frase a frase JÁ DURANTE a geração,
         # sobreposta à escrita — não espera a resposta inteira terminar.
         speaker = speaker_mod.StreamSpeaker() if ctx["voice_mode"] else None
@@ -572,6 +596,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
             except Exception:  # noqa: BLE001
                 pass
             ui.spacer(console)
+            title_mod.marcar()
+            tick_title()
 
 
 if __name__ == "__main__":

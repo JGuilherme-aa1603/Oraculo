@@ -62,6 +62,11 @@ THEME = Theme({
 })
 
 
+# Coluna em que o glifo do turno (`●`) é desenhado — ver `assistant_header`. A
+# linha de espera se ancora nela para o olho cair debaixo do ponto.
+_COL_GLIFO = 2
+
+
 def make_console(**kwargs) -> Console:
     """Console do Oráculo: o rich comum, já com o tema da paleta.
 
@@ -87,7 +92,8 @@ SPINNERS[IRIS] = {
 class Waiting:
     """Linha de espera: a íris girando, um rótulo, o relógio e o que fazer.
 
-        (◈)  Pensando...  · 3s · Ctrl+C corta a resposta
+        ●  Oráculo
+       (✦) Pensando...  · 3s · Ctrl+C corta a resposta
 
     O quadro da íris e o contador saem do relógio a cada renderização — nada
     aqui guarda estado de animação, e ninguém precisa chamar `update()` só para
@@ -117,9 +123,20 @@ class Waiting:
         # O recuo é próprio, não vem de um `indent()` por fora: embrulhar isto
         # num Padding esconderia o `ANIMADO` de quem procura a marca, e a linha
         # voltaria a congelar na tela cheia.
-        linha = Text(" " * config.UI_GUTTER)
+        #
+        # A íris cai exatamente na coluna do `●` do cabeçalho, e o rótulo na
+        # coluna do corpo — a linha de espera OCUPA o lugar da resposta que
+        # ainda não chegou, então tem que se encaixar na mesma grade:
+        #
+        #     ●  Oráculo
+        #    (◈) Pensando...
+        #
+        # Recuar pela calha inteira jogava o olho quatro colunas à direita do
+        # ponto, e a coluna inteira do turno parecia torta.
+        linha = Text(" " * max(0, _COL_GLIFO - 1))
         linha.append(f"({quadros[i]})", style=config.UI_COLOR_ACCENT)
-        linha.append(f"  {self.label}", style=self.style)
+        linha.append(" " * max(1, config.UI_GUTTER - _COL_GLIFO - 2))
+        linha.append(self.label, style=self.style)
         linha.append(f"  · {int(decorrido)}s", style=config.UI_COLOR_FAINT)
         if self.hint:
             linha.append(f" · {self.hint}", style=config.UI_COLOR_FAINT)
@@ -201,9 +218,11 @@ def user_echo(console: Console, text: str) -> None:
 
 def assistant_header(console: Console) -> None:
     """Abre um turno do Oráculo: glifo na margem + nome."""
-    head = Text("  ")
+    head = Text(" " * _COL_GLIFO)
     head.append(config.UI_GLYPH_ASSISTANT, style=config.UI_COLOR_ACCENT)
-    head.append(f"  {config.ASSISTANT_NAME}", style=f"bold {config.UI_COLOR_ACCENT}")
+    # O nome começa na calha, para o corpo da resposta alinhar debaixo dele.
+    head.append(" " * max(1, config.UI_GUTTER - _COL_GLIFO - 1))
+    head.append(config.ASSISTANT_NAME, style=f"bold {config.UI_COLOR_ACCENT}")
     console.print(head)
 
 

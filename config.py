@@ -217,21 +217,20 @@ UI_COLOR_ALERT = "#ec3013"      # avisos, erros, gravação em curso
 UI_COLOR_USER = UI_COLOR_PROMPT
 
 # A íris — o glifo que gira enquanto o Oráculo pensa, fala ou transcreve, e que
-# na splash aparece parado entre parênteses. A pupila dilata e contrai:
-# ◈ (anel) → ◆ (cheia) → ◈ → ◇ (vazia).
+# na splash aparece parado entre parênteses altos.
 #
-# Fica em Formas Geométricas (U+25C6-25C8) POR CAUSA DA FONTE, não por gosto. A
-# primeira versão usou ✦ ✧ ✜ (U+2726/2727/271C, Dingbats) e eles saíram
-# INVISÍVEIS no terminal: o kitty do projeto tem um
-#   symbol_map U+2700-U+276D ... Noto Color Emoji
-# e a Noto Color Emoji não contém esses caracteres — o terminal é obrigado a
-# procurá-los lá, não acha, e desenha vazio. Sem erro, sem aviso, só um par de
-# parênteses oco. U+25xx não é capturado por symbol_map nenhum e é a mesma faixa
-# do `●` do cabeçalho, que já se sabe que renderiza.
+# ATENÇÃO ao trocar estes caracteres: ✜ ✦ ✧ são Dingbats (U+271C, U+2726-U+2727)
+# e chegaram a sair INVISÍVEIS. O kitty desta máquina manda U+2700-U+276D para a
+# Noto Color Emoji, que não contém Dingbats — o terminal procura o glifo lá, não
+# acha e desenha nada. Sem erro, sem aviso, só um par de parênteses oco. O
+# conserto mora no ~/.config/kitty/kitty.conf, numa linha `symbol_map` posterior
+# que devolve estes três codepoints à MesloLGL Nerd Font.
 #
-# Ao trocar um glifo da interface, confira antes se ele está fora das faixas
-# redirecionadas em ~/.config/kitty/kitty.conf.
-UI_IRIS_FRAMES = ("◈", "◆", "◈", "◇")
+# Ou seja: glifo bonito não basta, ele precisa estar fora (ou ser resgatado) das
+# faixas redirecionadas do terminal. Confira o kitty.conf antes de adotar um
+# símbolo novo — e prefira U+25xx (Formas Geométricas, a faixa do `●` do
+# cabeçalho) quando quiser algo que funcione em qualquer terminal sem ajuste.
+UI_IRIS_FRAMES = ("✦", "✧", "✜", "✧")
 # 200 ms = 5 quadros/s, que é exatamente o `refresh_interval` da app em tela
 # cheia. Animar mais rápido que o repaint só produziria quadros pulados.
 UI_IRIS_INTERVAL_MS = 200

@@ -228,20 +228,32 @@ Quando os comandos de sistema forem implementados:
   cria por bloco ao reflowar. Sem isso, a primeira resposta com lista sai fora da paleta.
 - **Canto vivo em toda moldura.** Splash (`box.SQUARE`) e caixa de entrada usam cantos
   retos: a moldura é estrutura, não enfeite.
-- A íris `(◈ ◆ ◈ ◇)` é o olho do Oráculo: parada na splash, girando em `ui.Waiting` enquanto
+- A íris `(✦ ✧ ✜ ✧)` é o olho do Oráculo: parada na splash, girando em `ui.Waiting` enquanto
   ele pensa, fala ou transcreve, e registrada como spinner do rich (`ui.IRIS`) para o
   `console.status`. `ui.Waiting` recalcula quadro e contador a cada renderização, sem thread
   e sem estado de animação guardado.
+- **Símbolo "grande" no terminal só existe em várias linhas.** Não há corpo de fonte, só
+  células. O olho da splash usa as peças de parêntese grande (U+239B-23A0) empilhadas em três
+  linhas em volta da íris. As três linhas precisam ter a **mesma largura em células**, senão a
+  coluna centralizada da splash desloca uma delas e a pupila sai do eixo.
+- **A linha de espera se ancora na grade do turno, não na calha.** A íris cai na coluna do `●`
+  (`ui._COL_GLIFO`) e o rótulo na coluna do corpo — ela ocupa o lugar da resposta que ainda não
+  chegou. Recuar pela calha inteira jogava o olho quatro colunas à direita do ponto e a coluna
+  do turno parecia torta.
 
 **A íris custou dois bugs, os dois silenciosos. Valem para qualquer glifo ou animação nova.**
 
-- **Glifo fora de faixa redirecionada.** A primeira versão usou `✦ ✧ ✜` (U+2726/2727/271C,
-  Dingbats) e eles saíram **invisíveis** — um par de parênteses oco. O `~/.config/kitty/kitty.conf`
-  tem `symbol_map U+2700-U+276D ... Noto Color Emoji`, e a Noto Color Emoji não contém esses
-  caracteres: o terminal é obrigado a procurá-los lá, não acha, e desenha nada. Sem erro, sem
-  fallback, sem aviso. **Antes de adotar um glifo, confira as faixas de `symbol_map`** — e
-  prefira U+25xx (Formas Geométricas), a mesma faixa do `●` do cabeçalho, que se sabe que
-  renderiza. Testar em `pyte` não pega isso: pyte é buffer de texto, não desenha fonte.
+- **Glifo dentro de faixa redirecionada do terminal some sem avisar.** `✦ ✧ ✜` (U+271C,
+  U+2726-U+2727) são Dingbats e saíram **invisíveis** — um par de parênteses oco. O
+  `~/.config/kitty/kitty.conf` tem `symbol_map U+2700-U+276D ... Noto Color Emoji`, e a Noto
+  Color Emoji não contém Dingbats: o terminal procura o glifo lá, não acha e desenha nada. Sem
+  erro, sem fallback, sem aviso. O conserto é uma linha `symbol_map` **posterior** no
+  kitty.conf devolvendo esses codepoints à MesloLGL Nerd Font (em faixas sobrepostas, a última
+  definição vence — `kitty.fonts.render.coalesce_symbol_maps` resolve por ordem de inserção).
+  Ao adotar um glifo novo, **confira as faixas de `symbol_map` antes**; quando quiser algo que
+  funcione em qualquer terminal sem ajuste, use U+25xx (Formas Geométricas), a faixa do `●`.
+  Testar em `pyte` não pega isso: pyte é buffer de texto, não desenha fonte — o caractere
+  *está* no stream, só não vira pixel.
 - **O transcript da tela cheia cacheia o bloco renderizado.** `Transcript.lines()` só refaz um
   bloco quando alguém escreve nele, o que é justamente o ponto do cache — então um renderable
   que muda com o *relógio* congela no primeiro desenho. No inline o `rich.Live` repinta sozinho

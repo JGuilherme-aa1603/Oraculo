@@ -91,11 +91,12 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 
 ### Retomar uma conversa
 
-`/retomar` lista as últimas conversas numeradas e `/retomar 3` continua a terceira de
-onde ela parou: as mensagens voltam para a memória do modelo (as últimas que couberem na
-janela de contexto) e os turnos novos são anexados ao **mesmo arquivo**, em vez de abrir
-um segundo registro pela metade. O Oráculo mostra o último par de mensagens para você se
-situar, e avisa quando o arquivo tem mais mensagens do que cabe na memória.
+`/retomar` lista as últimas conversas numeradas e `/retomar 3` continua a terceira de onde
+ela parou. **A conversa inteira volta para a tela**, no mesmo formato de sempre, para você
+ler e rolar; abaixo dela uma régua marca onde a conversa antiga acaba e a nova começa. As
+mensagens voltam também para a memória do modelo (as últimas que couberem na janela de
+contexto — o Oráculo avisa quando o arquivo tem mais do que cabe), e os turnos novos são
+anexados ao **mesmo arquivo**, em vez de abrir um segundo registro pela metade.
 
 ### Preferências lembradas
 

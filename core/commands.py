@@ -250,32 +250,33 @@ def _resumo(texto: str, largura: int = 68) -> str:
     return limpo if len(limpo) <= largura else limpo[: largura - 1].rstrip() + "…"
 
 
-def _previa_retomada(console, mensagens: list[dict]) -> None:
-    """Mostra o último par da conversa retomada, para você se situar.
+def _redesenhar_conversa(console, mensagens: list[dict]) -> None:
+    """Reescreve a conversa retomada no transcript, no formato de sempre.
 
-    Retomar sem ver onde parou é retomar no escuro: o título da sessão é a
-    primeira pergunta, que costuma ser justamente a parte de que você já lembra.
-    Vai como aparte (barra na margem), não como turno, porque isto não
-    aconteceu agora — é a conversa de ontem sendo lembrada.
+    Retomar é voltar para a conversa, então ela precisa estar NA TELA: para ler,
+    rolar e lembrar do que já foi dito. Uma prévia de duas linhas — que foi a
+    primeira tentativa — dizia o título e mais nada; quem retomava continuava
+    sem saber o que tinha conversado ali.
+
+    Os turnos saem pela mesma calha de um turno ao vivo (`ui.user_echo`,
+    `ui.assistant_header`, `ui.body`), e não num formato "de arquivo": é a mesma
+    conversa, e dar a ela outra aparência só faria procurar diferença onde não
+    há. O que muda é o que não existe: sem rodapé de métricas, porque não houve
+    turno agora, e sem o raciocínio, que nunca foi gravado.
     """
-    from rich.console import Group
+    from rich.markdown import Markdown
 
-    ultima_pergunta = next((m for m in reversed(mensagens)
-                            if m.get("role") == "user"), None)
-    ultima_resposta = next((m for m in reversed(mensagens)
-                            if m.get("role") == "assistant"), None)
-    if not ultima_pergunta and not ultima_resposta:
-        return
-
-    linhas = [Text("onde você parou", style=config.UI_COLOR_DIM)]
-    for msg, glifo in ((ultima_pergunta, config.UI_GLYPH_USER),
-                       (ultima_resposta, config.UI_GLYPH_ASSISTANT)):
-        if not msg:
+    for m in mensagens:
+        conteudo = (m.get("content") or "").strip()
+        if not conteudo:
             continue
-        linha = Text(f"{glifo} ", style=config.UI_COLOR_FAINT)
-        linha.append(_resumo(msg.get("content", "")), style=config.UI_COLOR_SOFT)
-        linhas.append(linha)
-    console.print(ui.indent(ui.LeftRule(Group(*linhas))))
+        papel = m.get("role")
+        if papel == "user":
+            ui.user_echo(console, conteudo)
+        elif papel == "assistant":
+            ui.assistant_header(console)
+            ui.body(console, Markdown(conteudo))
+            ui.spacer(console)
 
 
 def _handle_retomar(arg: str, ctx: dict) -> None:
@@ -327,14 +328,21 @@ def _handle_retomar(arg: str, ctx: dict) -> None:
 
     na_memoria = chain.memory.carregar(mensagens)
     invalidar_sessoes()      # a partir daqui esta sessão é a mais recente
+
     ui.ok(console, f'Retomando "{_resumo(escolhida["title"], 48)}" '
-                   f'— {escolhida["ago"]}.')
+                   f'— {escolhida["ago"]} · {len(mensagens)} mensagens.')
+    ui.spacer(console)
+    _redesenhar_conversa(console, mensagens)
+
     # A janela de contexto é menor que o arquivo, e dizer isso evita a surpresa
-    # de perguntar sobre o começo de uma conversa longa e não ser entendido.
+    # de perguntar sobre o começo de uma conversa longa e não ser entendido: o
+    # texto está todo na tela, mas o modelo só recebe a parte que coube.
     if na_memoria < len(mensagens):
-        ui.notice(console, f"  {len(mensagens)} mensagens no arquivo; as "
-                           f"{na_memoria} últimas entraram na memória.")
-    _previa_retomada(console, mensagens)
+        ui.notice(console, f"desta conversa, as {na_memoria} últimas mensagens "
+                           f"entraram na memória do modelo; o resto está acima, "
+                           f"só para você.")
+    ui.divider(console, " continuando daqui ")
+    ui.spacer(console)
 
 
 def _handle_padroes(arg: str, ctx: dict) -> None:

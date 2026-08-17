@@ -194,6 +194,11 @@ Regras de código:
 
 **Sessões e preferências (`core/history.py`, `core/prefs.py`).**
 
+- **`/retomar` redesenha a conversa inteira no transcript**, pela mesma calha de um turno ao
+  vivo. A primeira versão mostrava só uma prévia de duas linhas e estava errada: retomar é
+  voltar para a conversa, e sem ela na tela não há como saber o que foi dito ali. Sem
+  rodapé de métricas (não houve turno agora) e sem raciocínio (nunca foi gravado); uma
+  régua (`ui.divider`) marca onde o passado acaba.
 - **`/retomar` continua o MESMO arquivo**, não abre outro: partir a conversa em dois deixa
   dois registros pela metade na lista de recentes, cada um parecendo ter morrido cedo.
 - **O nome do arquivo de sessão precisava ser único.** O carimbo tem resolução de segundo,
@@ -226,6 +231,15 @@ Regras de código:
   documento. Isso cria um estado que o prompt_toolkit não tem — destacado mas não aplicado
   — e é por isso que existe `_destaque_nao_aplicado()`: Enter e Tab precisam distinguir
   "você escolheu com a seta" de "eu destaquei para você".
+- **Destacar por conta própria obriga a blindar a leitura do índice.**
+  `CompletionState.current_completion` indexa a lista **sem checar o tamanho** — o que se
+  sustenta enquanto só o prompt_toolkit mexe no índice. Com o destaque sendo nosso, um
+  índice sobrevive à troca de lista que o completer assíncrono faz e passa a apontar para
+  fora dela. O `IndexError` subia de dentro do tratador do Enter, era engolido, e a
+  mensagem **ficava parada na caixa sem erro nenhum na tela**: `/retomar 1` enviava e
+  `/retomar 2` não, conforme quantas sugestões havia e quando o completer terminava. Daí
+  `_sugestao_em_foco()` (nunca estoura) e o conserto do índice defasado em
+  `_destacar_primeira()`. **Nunca leia `current_completion` direto neste arquivo.**
 - **Não dá para confiar no `complete_state` no Enter.** Com `complete_while_typing` o menu
   é preenchido de forma assíncrona: quem digita rápido, ou cola a linha, chega no Enter
   antes de existir sugestão. Daí `_primeira_sugestao()` recalcular na hora — o sintoma

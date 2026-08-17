@@ -27,6 +27,7 @@ import time
 from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.constrain import Constrain
 from rich.padding import Padding
+from rich.rule import Rule
 from rich.segment import Segment
 from rich.spinner import SPINNERS
 from rich.style import Style
@@ -315,6 +316,17 @@ def heading(console: Console, text: str) -> None:
     `indent()` do corpo, então o alinhamento é feito aqui.
     """
     console.print(Text("  " + text, style=f"bold {config.UI_COLOR_ACCENT}"))
+
+
+def divider(console: Console, text: str = "") -> None:
+    """Régua fina com um rótulo, para marcar uma fronteira no transcript.
+
+    Usada no `/retomar`, separando a conversa que voltou do disco do que vai ser
+    dito agora. Sem uma fronteira visível, a conversa antiga e a nova viram um
+    bloco só e não dá para saber onde uma acaba.
+    """
+    console.print(Rule(Text(text, style=config.UI_COLOR_DIM) if text else "",
+                       style=config.UI_COLOR_BORDER, characters="─"))
 
 
 def spacer(console: Console) -> None:

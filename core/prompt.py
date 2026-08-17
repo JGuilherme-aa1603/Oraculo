@@ -119,6 +119,63 @@ def _e_pasta(caminho: str) -> bool:
         return False
 
 
+def _destacar_primeira(buf) -> None:
+    """Deixa a primeira sugestão já destacada assim que o menu abre.
+
+    Mexe só no índice do estado, nunca no documento. O caminho normal de
+    seleção do prompt_toolkit é o `go_to_completion`, que além de destacar
+    **reescreve o texto do buffer** com a sugestão — e aí digitar `/` viraria
+    `/ajuda` na caixa, e a próxima tecla sairia como `/ajudat`. O
+    `CompletionState.go_to_index` faz só a metade que interessa.
+
+    Com a primeira já destacada, a seta para baixo vai para a **segunda**,
+    que é o comportamento esperado de um menu que já mostra uma escolha
+    feita. Quem aplica a primeira é o Enter (ou o Tab).
+
+    Também conserta um índice defasado: o completer roda de forma assíncrona
+    e troca a lista de sugestões enquanto você digita, então um índice
+    apontado para a lista anterior sobrevive à troca e passa a apontar para
+    fora dela.
+    """
+    estado = buf.complete_state
+    if estado is None or not estado.completions:
+        return
+    if (estado.complete_index is None
+            or estado.complete_index >= len(estado.completions)):
+        estado.go_to_index(0)
+
+def _sugestao_em_foco(buf):
+    """A sugestão destacada no menu, ou None. Nunca estoura.
+
+    Existe porque `CompletionState.current_completion` indexa a lista de
+    sugestões **sem checar o tamanho**. Enquanto quem mexe no índice é só o
+    prompt_toolkit isso se sustenta; a partir do momento em que o destaque
+    da primeira é nosso, o índice pode sobreviver a uma troca de lista feita
+    pelo completer assíncrono e apontar para fora.
+
+    O estrago era invisível: o `IndexError` subia de dentro do tratador do
+    Enter, o prompt_toolkit engolia a exceção e a mensagem simplesmente
+    ficava parada na caixa, sem erro nenhum na tela. Dependia de quantas
+    sugestões havia e de quando o completer terminava — `/retomar 1` enviava
+    e `/retomar 2` não.
+    """
+    estado = buf.complete_state
+    if estado is None or estado.complete_index is None:
+        return None
+    if not 0 <= estado.complete_index < len(estado.completions):
+        return None
+    return estado.completions[estado.complete_index]
+
+def _destaque_nao_aplicado(buf) -> bool:
+    """True se há sugestão destacada mas o texto ainda é o que você digitou.
+
+    É o estado que `_destacar_primeira` cria e que não existe no
+    prompt_toolkit padrão, onde destacar e inserir andam juntos.
+    """
+    return (_sugestao_em_foco(buf) is not None
+            and buf.text == buf.complete_state.original_document.text)
+
+
 def _build_completer(status_fn):
     """Autocomplete dos /comandos e dos seus argumentos.
 
@@ -417,36 +474,7 @@ def build_editor(status_fn: Callable[[], dict],
             return sugestao
         return None
 
-    def _destacar_primeira(_buf=None) -> None:
-        """Deixa a primeira sugestão já destacada assim que o menu abre.
-
-        Mexe SÓ no `complete_index`. O caminho normal de seleção do
-        prompt_toolkit é o `go_to_completion`, que além de destacar **reescreve
-        o texto do buffer** com a sugestão — e aí digitar `/` viraria `/ajuda`
-        na caixa, e a próxima tecla sairia como `/ajudat`. Como
-        `current_completion` é derivado do índice, atribuí-lo direto destaca sem
-        encostar no documento.
-
-        Com a primeira já destacada, a seta para baixo vai para a **segunda**,
-        que é o comportamento esperado de um menu que já mostra uma escolha
-        feita. Quem aplica a primeira é o Enter (ou o Tab).
-        """
-        estado = buffer.complete_state
-        if (estado is not None and estado.complete_index is None
-                and estado.completions):
-            estado.complete_index = 0
-
     buffer.on_completions_changed += _destacar_primeira
-
-    def _destaque_nao_aplicado(buf) -> bool:
-        """True se há sugestão destacada mas o texto ainda é o que você digitou.
-
-        É o estado que `_destacar_primeira` cria e que não existe no
-        prompt_toolkit padrão, onde destacar e inserir andam juntos.
-        """
-        estado = buf.complete_state
-        return (estado is not None and estado.current_completion is not None
-                and buf.text == estado.original_document.text)
 
     def _enter_no_caminho(buf) -> bool:
         """Enter dentro de um argumento de caminho — navegar pastas com Enter.
@@ -481,7 +509,7 @@ def build_editor(status_fn: Callable[[], dict],
         # do diretório atual.
         if arg.strip():
             if _destaque_nao_aplicado(buf):
-                sugestao = buf.complete_state.current_completion
+                sugestao = _sugestao_em_foco(buf)
             elif buf.complete_state is not None:
                 sugestao = None     # navegou com a seta: o texto já está aqui
             else:
@@ -508,8 +536,7 @@ def build_editor(status_fn: Callable[[], dict],
         if _enter_no_caminho(buf):
             return
 
-        estado = buf.complete_state
-        if (estado is not None and estado.current_completion is not None
+        if (_sugestao_em_foco(buf) is not None
                 and not _destaque_nao_aplicado(buf)):
             # Escolhido com Tab/setas: o texto já está no buffer. Fecha o menu
             # zerando o estado — `cancel_completion()` NÃO serve aqui, ele faz

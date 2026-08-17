@@ -270,13 +270,6 @@ adiciona latência). Quando ligado, o indicador mostra **"Pensando..."** apenas 
 há raciocínio real acontecendo; pressione **Ctrl+O** durante a resposta para mostrar/ocultar
 o texto do raciocínio ao vivo. Modelos sem suporte são detectados e o `/think` avisa.
 
-Com o Ctrl+O ligado o raciocínio **fica** no transcript, acima da resposta e com a duração
-da fase (`raciocínio · 4.2s`), em vez de sumir quando o modelo termina de pensar — dá para
-voltar e reler com calma. Ele nunca entra na memória da conversa: é andaime do turno, e
-guardá-lo empurraria a janela de contexto para fora com texto que o modelo não deve reler.
-No modo tela cheia o Ctrl+O funciona a qualquer momento; no inline, só durante a resposta
-(é quando o observador de teclado está ativo).
-
 ### Comando global
 
 O wrapper `bin/oraculo` roda o projeto de qualquer diretório usando o venv, sem

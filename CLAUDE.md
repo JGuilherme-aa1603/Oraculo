@@ -228,10 +228,29 @@ Quando os comandos de sistema forem implementados:
   cria por bloco ao reflowar. Sem isso, a primeira resposta com lista sai fora da paleta.
 - **Canto vivo em toda moldura.** Splash (`box.SQUARE`) e caixa de entrada usam cantos
   retos: a moldura é estrutura, não enfeite.
-- A íris `(✦ ✧ ✜ ✧)` é o olho do Oráculo: parada na splash, girando em `ui.Waiting` enquanto
+- A íris `(◈ ◆ ◈ ◇)` é o olho do Oráculo: parada na splash, girando em `ui.Waiting` enquanto
   ele pensa, fala ou transcreve, e registrada como spinner do rich (`ui.IRIS`) para o
-  `console.status`. `ui.Waiting` recalcula quadro e contador a cada renderização — o Live já
-  repinta várias vezes por segundo, então a linha se anima sem thread nenhuma.
+  `console.status`. `ui.Waiting` recalcula quadro e contador a cada renderização, sem thread
+  e sem estado de animação guardado.
+
+**A íris custou dois bugs, os dois silenciosos. Valem para qualquer glifo ou animação nova.**
+
+- **Glifo fora de faixa redirecionada.** A primeira versão usou `✦ ✧ ✜` (U+2726/2727/271C,
+  Dingbats) e eles saíram **invisíveis** — um par de parênteses oco. O `~/.config/kitty/kitty.conf`
+  tem `symbol_map U+2700-U+276D ... Noto Color Emoji`, e a Noto Color Emoji não contém esses
+  caracteres: o terminal é obrigado a procurá-los lá, não acha, e desenha nada. Sem erro, sem
+  fallback, sem aviso. **Antes de adotar um glifo, confira as faixas de `symbol_map`** — e
+  prefira U+25xx (Formas Geométricas), a mesma faixa do `●` do cabeçalho, que se sabe que
+  renderiza. Testar em `pyte` não pega isso: pyte é buffer de texto, não desenha fonte.
+- **O transcript da tela cheia cacheia o bloco renderizado.** `Transcript.lines()` só refaz um
+  bloco quando alguém escreve nele, o que é justamente o ponto do cache — então um renderable
+  que muda com o *relógio* congela no primeiro desenho. No inline o `rich.Live` repinta sozinho
+  e o bug não aparece, o que o torna fácil de atribuir à fonte e parar de procurar. A saída é
+  a marca `ANIMADO` em `ui.Waiting`, que `_animado()` procura no `append`/`replace_last` para
+  invalidar o bloco a cada quadro. Ela é lida **no primeiro nível dos args**: passar a
+  `Waiting` dentro de um `Padding`/`Group` esconde a marca e recongela a íris — por isso ela
+  traz o próprio recuo e nunca passa por `ui.indent()`. `UI_IRIS_INTERVAL_MS` casa com o
+  `refresh_interval` da app (200 ms): animar mais rápido que o repaint só pula quadros.
 - Layout da splash: duas colunas estilo Claude Code — identidade à esquerda (a íris entre
   parênteses, modelo, memória, path), comandos + conversas recentes à direita.
 - Biblioteca: `rich`. Usar `Table.grid` para o layout de colunas.

@@ -97,9 +97,10 @@ class _ThinkingStatus:
 
     def _show(self, label: str, style: str) -> None:
         with contextlib.suppress(Exception):
-            self._live.update(ui.indent(
-                ui.Waiting(label, "Ctrl+C corta a resposta",
-                           since=self._t0, style=style)))
+            # Sem `ui.indent()` por fora: o Padding esconderia a marca `ANIMADO`
+            # e a íris congelaria na tela cheia. A `Waiting` traz o próprio recuo.
+            self._live.update(ui.Waiting(label, "Ctrl+C corta a resposta",
+                                         since=self._t0, style=style))
 
     def first_token(self) -> None:
         self._done.set()
@@ -112,6 +113,10 @@ def _thinking_view(show: bool, reasoning: str, since: float):
     Com o texto à mostra o bloco ganha só uma barra na margem, não uma moldura:
     o raciocínio é um aparte do turno, e uma caixa fechada o deixaria mais
     pesado na tela do que a própria resposta.
+
+    Devolve o renderable JÁ recuado. Só o ramo do texto passa pelo `indent()`:
+    a `Waiting` traz o recuo dela e não pode ser embrulhada, senão o `ANIMADO`
+    some e a íris congela na tela cheia.
     """
     if show:
         shown = reasoning.strip()
@@ -120,7 +125,7 @@ def _thinking_view(show: bool, reasoning: str, since: float):
         cabecalho = Text("raciocínio", style=config.UI_COLOR_DIM)
         cabecalho.append("  · Ctrl+O oculta", style=config.UI_COLOR_FAINT)
         corpo = Text(shown or "...", style=f"italic {config.UI_COLOR_FAINT}")
-        return ui.LeftRule(Group(cabecalho, corpo))
+        return ui.indent(ui.LeftRule(Group(cabecalho, corpo)))
     return ui.Waiting("Pensando...", "Ctrl+O mostra o raciocínio", since=since)
 
 
@@ -528,9 +533,9 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                     if kind == "think":
                         reasoning.append(text)
                         if now - last_render >= _REFRESH_INTERVAL:
-                            live.update(ui.indent(_thinking_view(
+                            live.update(_thinking_view(
                                 ctx.get("show_thinking"), "".join(reasoning),
-                                turno_t0)))
+                                turno_t0))
                             last_render = now
                         continue
                     # resposta

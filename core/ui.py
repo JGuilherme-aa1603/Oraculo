@@ -87,12 +87,20 @@ SPINNERS[IRIS] = {
 class Waiting:
     """Linha de espera: a íris girando, um rótulo, o relógio e o que fazer.
 
-        (✦)  Pensando...  · 3s · Ctrl+C corta a resposta
+        (◈)  Pensando...  · 3s · Ctrl+C corta a resposta
 
-    O quadro da íris e o contador saem do relógio a cada renderização, e o Live
-    já repinta várias vezes por segundo — então a linha se anima sozinha, sem
-    thread e sem ninguém precisar chamar `update()` só para mexer o ponteiro.
+    O quadro da íris e o contador saem do relógio a cada renderização — nada
+    aqui guarda estado de animação, e ninguém precisa chamar `update()` só para
+    mexer o ponteiro. O que falta é garantir que a renderização *aconteça*: o
+    `rich.Live` do modo inline repinta sozinho, mas o transcript da tela cheia
+    guarda o resultado de cada bloco em cache e só o refaz quando o bloco muda.
+    Daí o `ANIMADO`: é a marca que `core/tui.py` procura para invalidar este
+    bloco a cada quadro. Sem ela a íris congela no primeiro desenho — e congela
+    *silenciosamente*, que foi como o bug passou.
     """
+
+    #: Marca lida por core/tui.py — este renderable muda sozinho com o tempo.
+    ANIMADO = True
 
     def __init__(self, label: str, hint: str = "", *,
                  since: float | None = None, style: str | None = None) -> None:
@@ -106,9 +114,10 @@ class Waiting:
         decorrido = time.monotonic() - self.since
         quadros = config.UI_IRIS_FRAMES
         i = int(decorrido * 1000 / config.UI_IRIS_INTERVAL_MS) % len(quadros)
-        # Sem recuo próprio: quem chama passa pelo `indent()`, e a linha ocupa o
-        # lugar em que o corpo da resposta vai aparecer.
-        linha = Text()
+        # O recuo é próprio, não vem de um `indent()` por fora: embrulhar isto
+        # num Padding esconderia o `ANIMADO` de quem procura a marca, e a linha
+        # voltaria a congelar na tela cheia.
+        linha = Text(" " * config.UI_GUTTER)
         linha.append(f"({quadros[i]})", style=config.UI_COLOR_ACCENT)
         linha.append(f"  {self.label}", style=self.style)
         linha.append(f"  · {int(decorrido)}s", style=config.UI_COLOR_FAINT)

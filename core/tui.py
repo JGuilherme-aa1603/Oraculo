@@ -182,13 +182,29 @@ class _PrintBlock:
 
     Guardar os argumentos (e não o texto já renderizado) é o que permite
     reflowar tudo quando o terminal muda de largura.
+
+    `vivo` marca o bloco cujo conteúdo muda com o relógio (a íris de `ui.Waiting`),
+    e não só quando alguém escreve nele. O cache existe justamente para não
+    re-renderizar o que não mudou, então sem essa marca um renderable animado
+    fica congelado no primeiro desenho.
     """
 
-    __slots__ = ("args", "kwargs")
+    __slots__ = ("args", "kwargs", "vivo")
 
-    def __init__(self, args: tuple, kwargs: dict) -> None:
+    def __init__(self, args: tuple, kwargs: dict, vivo: bool = False) -> None:
         self.args = args
         self.kwargs = kwargs
+        self.vivo = vivo
+
+
+def _animado(args: tuple) -> bool:
+    """True se algum renderable do bloco se redesenha sozinho (ver ui.Waiting).
+
+    Olha só o primeiro nível de propósito: quem quer ser animado é passado
+    direto ao `update()`, sem embrulho — um Padding ou Group por fora esconderia
+    a marca, e é melhor que isso falhe no lugar certo do que silenciosamente.
+    """
+    return any(getattr(a, "ANIMADO", False) for a in args)
 
 
 class Transcript:
@@ -208,7 +224,7 @@ class Transcript:
     # -- escrita ---------------------------------------------------------
     def append(self, args: tuple, kwargs: dict) -> None:
         with self._lock:
-            self._blocks.append(_PrintBlock(args, kwargs))
+            self._blocks.append(_PrintBlock(args, kwargs, _animado(args)))
             self._cache.append(None)
             self._lines = None
         self.on_change()
@@ -216,12 +232,13 @@ class Transcript:
     def replace_last(self, args: tuple, kwargs: dict) -> None:
         """Substitui o último bloco — é assim que a resposta cresce em streaming
         sem empilhar uma cópia por token."""
+        bloco = _PrintBlock(args, kwargs, _animado(args))
         with self._lock:
             if not self._blocks:
-                self._blocks.append(_PrintBlock(args, kwargs))
+                self._blocks.append(bloco)
                 self._cache.append(None)
             else:
-                self._blocks[-1] = _PrintBlock(args, kwargs)
+                self._blocks[-1] = bloco
                 self._cache[-1] = None
             self._lines = None
         self.on_change()
@@ -252,6 +269,14 @@ class Transcript:
 
     def lines(self) -> list[str]:
         with self._lock:
+            # Bloco vivo (a íris) é refeito a cada quadro: o conteúdo dele muda
+            # com o relógio, não com a escrita, então o cache o congelaria. É um
+            # bloco pequeno e some assim que a resposta começa a chegar — o
+            # custo é uma linha de Text por repaint.
+            for i, bloco in enumerate(self._blocks):
+                if bloco.vivo and self._cache[i] is not None:
+                    self._cache[i] = None
+                    self._lines = None
             if self._lines is None:
                 for i, bloco in enumerate(self._blocks):
                     if self._cache[i] is None:

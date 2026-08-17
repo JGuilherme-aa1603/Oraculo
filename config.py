@@ -217,10 +217,24 @@ UI_COLOR_ALERT = "#ec3013"      # avisos, erros, gravação em curso
 UI_COLOR_USER = UI_COLOR_PROMPT
 
 # A íris — o glifo que gira enquanto o Oráculo pensa, fala ou transcreve, e que
-# na splash aparece parado entre parênteses. Quatro quadros a ~6/s: rápido o
-# bastante para parecer vivo, lento o bastante para não piscar.
-UI_IRIS_FRAMES = ("✦", "✧", "✜", "✧")
-UI_IRIS_INTERVAL_MS = 160
+# na splash aparece parado entre parênteses. A pupila dilata e contrai:
+# ◈ (anel) → ◆ (cheia) → ◈ → ◇ (vazia).
+#
+# Fica em Formas Geométricas (U+25C6-25C8) POR CAUSA DA FONTE, não por gosto. A
+# primeira versão usou ✦ ✧ ✜ (U+2726/2727/271C, Dingbats) e eles saíram
+# INVISÍVEIS no terminal: o kitty do projeto tem um
+#   symbol_map U+2700-U+276D ... Noto Color Emoji
+# e a Noto Color Emoji não contém esses caracteres — o terminal é obrigado a
+# procurá-los lá, não acha, e desenha vazio. Sem erro, sem aviso, só um par de
+# parênteses oco. U+25xx não é capturado por symbol_map nenhum e é a mesma faixa
+# do `●` do cabeçalho, que já se sabe que renderiza.
+#
+# Ao trocar um glifo da interface, confira antes se ele está fora das faixas
+# redirecionadas em ~/.config/kitty/kitty.conf.
+UI_IRIS_FRAMES = ("◈", "◆", "◈", "◇")
+# 200 ms = 5 quadros/s, que é exatamente o `refresh_interval` da app em tela
+# cheia. Animar mais rápido que o repaint só produziria quadros pulados.
+UI_IRIS_INTERVAL_MS = 200
 
 # Rodapé por turno com as métricas da telemetria (latência, tokens/s). Independe
 # de TELEMETRY_ENABLED: aqui é só exibição, nada é gravado em disco.

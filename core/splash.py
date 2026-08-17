@@ -14,11 +14,15 @@ from rich.table import Table
 from rich.text import Text
 
 import config
+from core import ui
 
-console = Console()
+console = ui.make_console()
 
 _RULE = "─" * 22
-_SYMBOLS = "◈    ⟁    ◈"
+# A íris parada. Na splash ela não gira — a splash é impressa uma vez e vira um
+# bloco do transcript, não uma região repintada. É o mesmo glifo que gira depois,
+# durante a resposta (ui.iris), então o olho é reconhecível nos dois estados.
+_IRIS = config.UI_IRIS_FRAMES[0]
 
 
 def _user_name() -> str:
@@ -50,55 +54,104 @@ def _join(lines: list[Text]) -> Text:
     return out
 
 
+def _iris_line() -> Text:
+    """O olho: a íris em ciano entre parênteses roxos, no tamanho da coluna."""
+    line = Text()
+    line.append("( ", style=f"bold {config.UI_COLOR_PROMPT}")
+    line.append(_IRIS, style=f"bold {config.UI_COLOR_ACCENT}")
+    line.append(" )", style=f"bold {config.UI_COLOR_PROMPT}")
+    return line
+
+
 def _identity(model: str, memory_active: bool) -> list[Text]:
     memoria = "ativa" if memory_active else "inativa"
+    modelo = Text(model, style=config.UI_COLOR_ACCENT)
+    modelo.append(" · offline · local", style=config.UI_COLOR_DIM)
     return [
         Text(""),
-        Text(f"Bem-vindo, {_user_name()}!", style="bold white"),
+        Text(f"Bem-vindo, {_user_name()}!", style=f"bold {config.UI_COLOR_BRIGHT}"),
         Text(""),
-        Text(_SYMBOLS, style="bold bright_cyan"),
+        _iris_line(),
         Text(""),
-        Text(f"{model} · offline · local", style="grey70"),
-        Text(f"memória {memoria} · {config.DEVICE_LABEL}", style="grey70"),
-        Text(_cwd_display(), style="grey50"),
+        modelo,
+        Text(f"memória {memoria} · {config.DEVICE_LABEL}",
+             style=config.UI_COLOR_DIM),
+        Text(_cwd_display(), style=config.UI_COLOR_FAINT),
         Text(""),
     ]
+
+
+def _section(titulo: str) -> list[Text]:
+    return [
+        Text(titulo, style=f"bold {config.UI_COLOR_ACCENT}"),
+        Text(_RULE, style=config.UI_COLOR_BORDER),
+    ]
+
+
+def _ago_line(ago: str, messages: int) -> Text:
+    """Meta de uma conversa recente: só a quantidade recebe destaque.
+
+    O "há" fica apagado junto com o resto e o valor ("16 horas") sai em ciano —
+    é o que o olho procura ao varrer a lista.
+    """
+    meta = Text("  ")
+    prefixo, _, valor = ago.partition(" ")
+    if valor and prefixo == "há":
+        meta.append("há ", style=config.UI_COLOR_FAINT)
+        meta.append(valor, style=config.UI_COLOR_ACCENT)
+    else:
+        meta.append(ago, style=config.UI_COLOR_ACCENT)
+    meta.append(f" · {messages} mensagens", style=config.UI_COLOR_FAINT)
+    return meta
 
 
 def _info(recent_sessions: list[dict]) -> list[Text]:
-    lines: list[Text] = [
-        Text("Comandos disponíveis", style="bold cyan"),
-        Text(_RULE, style="cyan dim"),
-    ]
+    lines: list[Text] = _section("Comandos disponíveis")
 
     def cmd_line(prefix: str, command: str, suffix: str) -> Text:
-        t = Text(prefix, style="grey85")
-        t.append(command, style="bright_cyan")
-        t.append(suffix, style="grey85")
+        t = Text(prefix, style=config.UI_COLOR_SOFT)
+        t.append(command, style=config.UI_COLOR_PROMPT)
+        t.append(suffix, style=config.UI_COLOR_SOFT)
         return t
 
     lines.append(cmd_line("Digite ", "/ajuda", " para ver todos os comandos"))
     lines.append(cmd_line("Use ", "/modelo", " para trocar o modelo ativo"))
     lines.append(cmd_line("Use ", "/sair", " para encerrar o Oráculo"))
     lines.append(Text(""))
-    lines.append(Text("Conversas recentes", style="bold cyan"))
-    lines.append(Text(_RULE, style="cyan dim"))
+    lines += _section("Conversas recentes")
 
     if not recent_sessions:
-        lines.append(Text("nenhuma conversa ainda", style="grey50"))
+        lines.append(Text("nenhuma conversa ainda", style=config.UI_COLOR_FAINT))
         return lines
 
     for s in recent_sessions:
-        lines.append(Text(_truncate(s.get("title", "")), style="grey85"))
-        meta = Text("  ")
-        meta.append(s.get("ago", ""), style="cyan dim")
-        meta.append(f" · {s.get('messages', 0)} mensagens", style="grey50")
-        lines.append(meta)
+        lines.append(Text(_truncate(s.get("title", "")),
+                          style=config.UI_COLOR_SOFT))
+        lines.append(_ago_line(s.get("ago", ""), s.get("messages", 0)))
     return lines
 
 
+def _footer(fullscreen: bool) -> Text:
+    """Linha abaixo da moldura: o que é esta sessão e como se anda nela.
+
+    O modo de desenho aparece porque é ele que decide como rolar — no fullscreen
+    o scrollback do terminal não existe, e quem não souber disso conclui que a
+    conversa foi perdida.
+    """
+    line = Text("  ")
+    line.append(f"{config.UI_GLYPH_NOTICE}  ", style=config.UI_COLOR_FAINT)
+    line.append("sessão nova", style=config.UI_COLOR_FAINT)
+    if fullscreen:
+        line.append(" · tela cheia", style=config.UI_COLOR_DIM)
+        line.append(" · PgUp/PgDn rola", style=config.UI_COLOR_FAINT)
+    else:
+        line.append(" · rolagem do terminal", style=config.UI_COLOR_DIM)
+    return line
+
+
 def show_splash(model: str, recent_sessions: list[dict] | None = None,
-                memory_active: bool = True, out: Console | None = None) -> None:
+                memory_active: bool = True, out: Console | None = None,
+                fullscreen: bool = False) -> None:
     """Renderiza a splash de duas colunas.
 
     `out` permite desenhar em outro Console — no modo tela cheia é o
@@ -123,7 +176,8 @@ def show_splash(model: str, recent_sessions: list[dict] | None = None,
     # antes das bordas e pareceria flutuar no meio da moldura.
     left = [Text("")] + left + [Text("")]
     right = [Text("")] + right + [Text("")]
-    divider = _join([Text("│", style="cyan dim") for _ in range(height + 2)])
+    divider = _join([Text("│", style=config.UI_COLOR_BORDER)
+                     for _ in range(height + 2)])
 
     grid = Table.grid(expand=True, padding=(0, 2))
     # no_wrap + elipse: garante que nenhuma célula ganhe linhas extras por quebra
@@ -133,10 +187,15 @@ def show_splash(model: str, recent_sessions: list[dict] | None = None,
     grid.add_column(justify="left", ratio=6, no_wrap=True, overflow="ellipsis")
     grid.add_row(_join(left), divider, _join(right))
 
-    title = Text.assemble((f"{config.ASSISTANT_NAME} ", "bold cyan"),
-                          (f"v{config.APP_VERSION}", "white"))
+    title = Text.assemble(
+        (f"{config.ASSISTANT_NAME} ", f"bold {config.UI_COLOR_ACCENT}"),
+        (f"v{config.APP_VERSION}", config.UI_COLOR_DIM))
 
     out.print()
+    # Canto vivo, não arredondado: a moldura é estrutura, não enfeite — é a
+    # mesma decisão do sistema visual de origem, onde nenhum raio é maior que 0.
     out.print(Panel(grid, title=title, title_align="left",
-                    border_style="cyan", box=box.ROUNDED, padding=(0, 2)))
+                    border_style=config.UI_COLOR_BORDER, box=box.SQUARE,
+                    padding=(0, 2)))
+    out.print(_footer(fullscreen))
     out.print()

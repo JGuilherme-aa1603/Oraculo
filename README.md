@@ -336,9 +336,18 @@ modelo de STT (`STT_ENGINE`, `WHISPER_MODEL`), motor e voz de TTS (`TTS_ENGINE`,
 (`VOICE_MODE_DEFAULT`).
 
 A aparência do terminal fica no bloco **Interface do terminal**: `UI_MAX_WIDTH` (teto da
-coluna de leitura; `0` usa o terminal inteiro), `UI_GUTTER` (recuo do corpo), os glifos, a paleta,
+coluna de leitura; `0` usa o terminal inteiro), `UI_GUTTER` (recuo do corpo), os glifos,
 `UI_SHOW_TURN_METRICS` (rodapé com as métricas do turno), `CLEAR_ON_START` (limpar a
 tela ao abrir) e `INPUT_RICH_EDITOR`.
+
+A paleta são os `UI_COLOR_*`, em hexadecimal: ciano (`ACCENT`, o Oráculo e os títulos),
+roxo (`PROMPT`, o `>` e os comandos), verde (`BORDER`, molduras e divisores), três tons
+de texto (`BRIGHT`/`BODY`/`SOFT`), dois de apoio (`DIM`/`FAINT`) e um vermelho de alerta.
+Mudar uma dessas linhas repinta o transcript, a splash, a caixa de entrada e a barra de
+status de uma vez — o rich e o prompt_toolkit leem os mesmos valores. É hexadecimal, e não
+nome de cor, porque nome resolve para a paleta do emulador: o mesmo desenho sairia
+diferente em cada terminal. `UI_IRIS_FRAMES` são os quadros do olho que gira enquanto o
+Oráculo pensa, fala ou transcreve.
 
 ## Telemetria
 

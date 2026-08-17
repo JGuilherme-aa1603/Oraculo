@@ -67,7 +67,7 @@ oraculo/
     ├── audio.py     # captura de microfone + reprodução
     ├── keyboard.py  # monitor de tecla no terminal (Esc = barge-in, Ctrl+O = thinking)
     ├── telemetry.py # latência por estágio + tokens/s (opt-in, custo zero desligada)
-    ├── ui.py        # calha do transcript: eco, cabeçalho, corpo recuado, rodapé
+    ├── ui.py        # calha do transcript + paleta aplicada (tema, íris, avisos)
     ├── prompt.py    # caixa de entrada (prompt_toolkit): borda, histórico, autocomplete
     ├── tui.py       # modo tela cheia: transcript rolável + caixa fixa no rodapé
     └── splash.py    # splash screen de duas colunas (rich)
@@ -212,16 +212,43 @@ Quando os comandos de sistema forem implementados:
 
 ## Estilo visual (splash / terminal)
 
-- Paleta: **ciano** sobre fundo escuro, minimalista elegante.
-- Layout da splash: duas colunas estilo Claude Code — identidade à esquerda (símbolo `◈ ⟁ ◈`, modelo, memória, path), comandos + conversas recentes à direita.
+- **Paleta em `config.py` (`UI_COLOR_*`), em hexadecimal, nunca nome de cor do rich.**
+  Nome ("cyan", "grey42") resolve para a paleta do *emulador*: o mesmo código sai verde
+  num terminal e azul noutro, e "grey30" some em fundo claro. O hex também é o que o
+  prompt_toolkit come direto — é ele que mantém a caixa de entrada e a barra de status na
+  mesma paleta do transcript, que é desenhado pelo rich. Cor nova entra no config; nenhum
+  módulo inventa a sua.
+- Papéis: ciano `ACCENT` (Oráculo, títulos, estado ativo), roxo `PROMPT` (`>` e nomes de
+  comando), verde `BORDER` (molduras, divisores, a barra do raciocínio), `BRIGHT` (o que o
+  usuário escreveu), `BODY` (resposta), `SOFT` (descrições), `DIM`/`FAINT` (rótulos,
+  métricas, dicas), vermelho `ALERT` (avisos, erros e o ponto de gravação).
+- **O rich traz o próprio tema de Markdown e ele ignora a cor base.** `ui.THEME` sobrescreve
+  (número de lista, código, links, títulos) e `ui.make_console()` já o aplica — todo Console
+  que renderiza transcript precisa dele, inclusive o Console descartável que `core/tui.py`
+  cria por bloco ao reflowar. Sem isso, a primeira resposta com lista sai fora da paleta.
+- **Canto vivo em toda moldura.** Splash (`box.SQUARE`) e caixa de entrada usam cantos
+  retos: a moldura é estrutura, não enfeite.
+- A íris `(✦ ✧ ✜ ✧)` é o olho do Oráculo: parada na splash, girando em `ui.Waiting` enquanto
+  ele pensa, fala ou transcreve, e registrada como spinner do rich (`ui.IRIS`) para o
+  `console.status`. `ui.Waiting` recalcula quadro e contador a cada renderização — o Live já
+  repinta várias vezes por segundo, então a linha se anima sem thread nenhuma.
+- Layout da splash: duas colunas estilo Claude Code — identidade à esquerda (a íris entre
+  parênteses, modelo, memória, path), comandos + conversas recentes à direita.
 - Biblioteca: `rich`. Usar `Table.grid` para o layout de colunas.
 - Sem emoji no código de produção (a não ser que já esteja estabelecido na UI).
+- **Nada de medidor de nível falso na gravação.** `ui.recording` mostra o ponto vermelho e
+  o texto, sem barras de áudio: barra que não vem da amplitude real é enfeite mentindo
+  sobre a captura, e é exatamente onde um bug de microfone se esconderia (ver a nota do
+  `diagnostico_captura`).
 
 **Calha do transcript (`core/ui.py`).** Todo turno segue a mesma estrutura vertical: eco
 da pergunta recuado 2, cabeçalho `● Oráculo`, corpo recuado `UI_GUTTER`, rodapé com as
-métricas, linha em branco. Saída nova no terminal passa por `ui.notice/warn/error` em vez
-de `console.print` cru — é isso que mantém tudo na mesma margem. Blocos de lista (`/stt`,
-`/modelo`) indentam manualmente para casar com a calha.
+métricas, linha em branco. Saída nova no terminal passa pelos ajudantes do `ui` em vez de
+`console.print` cru — é isso que mantém tudo na mesma margem *e* na mesma paleta:
+`notice` (aparte), `ok` (confirmação, em acento), `warn`/`error` (alerta), `hint` (aparte
+que precisa destacar um comando dentro do texto, aceita marcação), `heading` (título de
+bloco de comando) e `recording` (microfone aberto). Blocos de lista (`/stt`, `/modelo`)
+indentam manualmente para casar com a calha.
 
 - Nada de painel por mensagem: a moldura custa 4 colunas por mensagem e vira ruído em
   resposta longa com código. O recuo dá a mesma hierarquia de graça.
@@ -302,8 +329,16 @@ Também: é o **cursor** que puxa a rolagem. Mexer em `vertical_scroll` direto �
 porque o Window recalcula o scroll a cada quadro para manter o cursor visível.
 
 **Caixa de entrada (`core/prompt.py`).** `Application` inline do prompt_toolkit, não
-`PromptSession`: o prompt padrão não fecha a borda direita. A moldura arredondada é
-remontada à mão porque a classe `Border` do prompt_toolkit tem os cantos hard-coded. O
+`PromptSession`: o prompt padrão não fecha a borda direita. A moldura é remontada à mão
+porque a classe `Border` do prompt_toolkit tem os cantos hard-coded — e é essa remontagem
+que dá a ela a cor da paleta. A barra de status tem três grupos com pesos diferentes:
+modelo em acento, flags permanentes (`texto`, `think off`, `mem 3/10`), o `state` do que
+está acontecendo agora (`ouvindo "Oráculo"`, `rolagem pausada`, `seleção copiada`) também
+em acento, e a dica de teclas encostada na borda **direita**. Quem enche o `state` é o
+`_status` do main (wake word) e o `_status_com_dica` do tui (transiente) — separá-lo da
+dica é o que impede a ajuda de teclado de piscar a cada seleção. Em terminal estreito cai
+primeiro a dica, depois o `state`, depois os flags: a barra nunca pode quebrar em duas
+linhas, isso desalinharia tudo abaixo da caixa. O
 menu de completion entra no fluxo abaixo da barra de status — como `Float` ele seria
 desenhado por cima da borda, já que numa app não-fullscreen o float não escapa da altura
 da própria app. Atenção: `Buffer.cancel_completion()` **reverte** o texto ao original;

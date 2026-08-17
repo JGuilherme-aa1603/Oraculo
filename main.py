@@ -12,11 +12,9 @@ import threading
 import time
 import urllib.request
 
-from rich.console import Console
+from rich.console import Group
 from rich.live import Live
 from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.spinner import Spinner
 from rich.text import Text
 
 import config
@@ -34,7 +32,7 @@ from core import (
 from core.chain import OraculoChain
 from core.splash import show_splash
 
-console = Console()
+console = ui.make_console()
 
 # Intervalo mínimo entre repaints do streaming (s). Casa com o refresh_per_second
 # do Live; segura o uso da iGPU (compositor) durante a escrita da resposta.
@@ -58,14 +56,18 @@ def _model_is_loaded(model_name: str) -> bool:
 
 
 class _ThinkingStatus:
-    """Spinner de espera até a 1ª saída do modelo chegar.
+    """Espera até a 1ª saída do modelo chegar, com a íris girando.
 
     Decide o rótulo pelo estado real:
-      - modelo ainda não carregado → "Carregando modelo..." (amarelo) e, em
-        background, verifica o /api/ps até subir, então troca o rótulo;
+      - modelo ainda não carregado → "Carregando modelo..." e, em background,
+        verifica o /api/ps até subir, então troca o rótulo;
       - carregado + thinking ligado → "Pensando..." (o modelo vai raciocinar);
       - carregado + thinking desligado → "Gerando..." (honesto: não há raciocínio).
     `first_token()` encerra a espera — daí o streaming assume o Live.
+
+    O relógio da linha começa em `_t0`, e não a cada troca de rótulo: o que
+    interessa é há quanto tempo o turno está esperando, não há quanto tempo o
+    texto na tela é aquele.
     """
 
     def __init__(self, live: Live, model_name: str, thinking: bool) -> None:
@@ -73,16 +75,18 @@ class _ThinkingStatus:
         self._model = model_name
         self._thinking = thinking
         self._done = threading.Event()
+        self._t0 = time.monotonic()
 
     def start(self) -> None:
         if _model_is_loaded(self._model):
             self._show(*self._wait_label())
         else:
-            self._show("Carregando modelo...", "yellow")
+            self._show("Carregando modelo...", config.UI_COLOR_DIM)
             threading.Thread(target=self._poll, daemon=True).start()
 
     def _wait_label(self) -> tuple[str, str]:
-        return ("Pensando...", "cyan") if self._thinking else ("Gerando...", "cyan")
+        rotulo = "Pensando..." if self._thinking else "Gerando..."
+        return (rotulo, config.UI_COLOR_SOFT)
 
     def _poll(self) -> None:
         while not self._done.wait(timeout=0.4):
@@ -91,33 +95,33 @@ class _ThinkingStatus:
                     self._show(*self._wait_label())
                 return
 
-    def _show(self, label: str, color: str) -> None:
+    def _show(self, label: str, style: str) -> None:
         with contextlib.suppress(Exception):
-            self._live.update(Spinner("dots", text=Text(label, style=f"dim {color}")))
+            self._live.update(ui.indent(
+                ui.Waiting(label, "Ctrl+C corta a resposta",
+                           since=self._t0, style=style)))
 
     def first_token(self) -> None:
         self._done.set()
 
 
-def _thinking_view(show: bool, reasoning: str):
-    """Renderable da fase de raciocínio: o texto real (Ctrl+O ligado) ou um
-    spinner honesto "Pensando..." (Ctrl+O desligado)."""
+def _thinking_view(show: bool, reasoning: str, since: float):
+    """Renderable da fase de raciocínio: o texto real (Ctrl+O ligado) ou a linha
+    de espera honesta "Pensando..." (Ctrl+O desligado).
+
+    Com o texto à mostra o bloco ganha só uma barra na margem, não uma moldura:
+    o raciocínio é um aparte do turno, e uma caixa fechada o deixaria mais
+    pesado na tela do que a própria resposta.
+    """
     if show:
         shown = reasoning.strip()
         if len(shown) > 1200:        # mostra só a cauda para não estourar a tela
             shown = "..." + shown[-1200:]
-        return Panel(
-            Text(shown or "...", style="dim italic"),
-            title="[cyan]Pensando[/]",
-            subtitle="[dim]Ctrl+O: ocultar[/]",
-            title_align="left",
-            subtitle_align="right",
-            border_style="dim cyan",
-        )
-    return Spinner(
-        "dots",
-        text=Text.from_markup("[cyan]Pensando...[/]  [dim](Ctrl+O: ver raciocínio)[/]"),
-    )
+        cabecalho = Text("raciocínio", style=config.UI_COLOR_DIM)
+        cabecalho.append("  · Ctrl+O oculta", style=config.UI_COLOR_FAINT)
+        corpo = Text(shown or "...", style=f"italic {config.UI_COLOR_FAINT}")
+        return ui.LeftRule(Group(cabecalho, corpo))
+    return ui.Waiting("Pensando...", "Ctrl+O mostra o raciocínio", since=since)
 
 
 def _speak_until_done(speaker: speaker_mod.StreamSpeaker, ctx: dict) -> Exception | None:
@@ -146,19 +150,22 @@ def _status(ctx: dict) -> dict:
     repaint, então acompanha /modelo, /voz e /think sem precisar de callback."""
     chain = ctx.get("chain")
     flags = ["voz" if ctx.get("voice_mode") else "texto"]
-    # O microfone aberto precisa ficar visível. É a única pista de que a sala
-    # está sendo ouvida, e escondê-la seria a pior escolha possível aqui.
-    if ctx.get("voice_mode") and config.WAKE_ENABLED:
-        flags.append(f'ouvindo "{config.WAKE_WORD}"')
     flags.append("think on" if ctx.get("thinking") else "think off")
     if chain is not None:
         # Memória em pares (pergunta+resposta), que é como a janela é cortada.
         with contextlib.suppress(Exception):
             mem = chain.memory
             flags.append(f"mem {len(mem.messages) // 2}/{mem.max_messages // 2}")
+    # O microfone aberto precisa ficar visível, e vai no campo de estado (em
+    # acento, à esquerda da dica): é a única pista de que a sala está sendo
+    # ouvida, e escondê-la ou apagá-la junto com os flags seria a pior escolha
+    # possível aqui.
+    estado = (f'ouvindo "{config.WAKE_WORD}"'
+              if ctx.get("voice_mode") and config.WAKE_ENABLED else "")
     return {
         "model": chain.model_name if chain is not None else config.OLLAMA_MODEL,
         "flags": flags,
+        "state": estado,
     }
 
 
@@ -179,7 +186,8 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
     usando_wake = config.WAKE_ENABLED and wake.disponivel()
 
     if not usando_wake:
-        typed = ask("[dim][voz] Enter para falar (ou digite e Enter):[/] ")
+        typed = ask(f"[{config.UI_COLOR_FAINT}][voz] Enter para falar "
+                    f"(ou digite e Enter):[/] ")
         if typed:
             return typed
 
@@ -191,9 +199,8 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
                 return digitado
             if path is None:                # Ctrl+C: sai da escuta, não do app
                 config.WAKE_ENABLED = False
-                ui.notice(console, f'escuta encerrada — diga /despertar para '
-                                   f'voltar a chamar por "{config.WAKE_WORD}".',
-                          style="cyan")
+                ui.ok(console, f'escuta encerrada — diga /despertar para '
+                               f'voltar a chamar por "{config.WAKE_WORD}".')
                 return None
         elif config.VAD_ENABLED and vad.disponivel():
             path = _gravar_com_vad(console)
@@ -201,7 +208,7 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
                 ui.notice(console, "não ouvi nada — tente de novo")
                 return None
         else:
-            ui.notice(console, "gravando... Enter para parar")
+            ui.recording(console, "gravando", "Enter para parar")
             path = audio.record_ptt(wait_stop=wait_stop)
         ui.notice(console, "transcrevendo...")
         _stt_t0 = time.monotonic()
@@ -235,7 +242,8 @@ def _gravar_com_vad(console) -> str | None:
         # Só a entrada em FALANDO interessa: o retorno a AGUARDANDO acontece
         # quando uma rajada curta é descartada, e anunciar isso viraria ruído.
         if estado == vad.FALANDO:
-            ui.notice(console, "gravando... (pare de falar para enviar)")
+            ui.recording(console, "gravando", "o VAD para sozinho quando "
+                                              "você parar de falar")
 
     ui.notice(console, "ouvindo...")
     return audio.record_vad(on_state=_on_state)
@@ -268,7 +276,7 @@ def _escutar_wake(ctx: dict, ask_nowait, interrupt, escuta_ctx=None):
             ui.notice(console, f'ouvindo — diga "{config.WAKE_WORD}" '
                                f'(Ctrl+C encerra a escuta)')
         elif estado == "acordado":
-            ui.notice(console, "sim?", style="cyan")
+            ui.ok(console, "sim?")
 
     contexto = escuta_ctx() if escuta_ctx is not None else contextlib.nullcontext()
     try:
@@ -329,10 +337,10 @@ def run_standalone(argv: list[str]) -> int:
     cmd = raw.split(maxsplit=1)[0].lower()
     if cmd not in commands.STANDALONE_COMMANDS:
         console.print(
-            f"[yellow]'{cmd.lstrip('/')}' só funciona dentro do "
-            f"{config.ASSISTANT_NAME}.[/]\n"
-            f"[dim]Rode 'oraculo' sem argumentos para abrir o chat, ou "
-            f"'oraculo ajuda' para ver os comandos.[/]"
+            f"[{config.UI_COLOR_ALERT}]'{cmd.lstrip('/')}' só funciona dentro "
+            f"do {config.ASSISTANT_NAME}.[/]\n"
+            f"[{config.UI_COLOR_FAINT}]Rode 'oraculo' sem argumentos para abrir "
+            f"o chat, ou 'oraculo ajuda' para ver os comandos.[/]"
         )
         return 2
 
@@ -355,8 +363,10 @@ def main() -> None:
         chain = OraculoChain()
     except Exception as exc:  # noqa: BLE001
         console.print(
-            f"[bold red]Falha ao iniciar o {config.ASSISTANT_NAME}:[/] {exc}\n"
-            "[yellow]O Ollama está rodando? Tente: ollama serve[/]"
+            f"[bold {config.UI_COLOR_ALERT}]Falha ao iniciar o "
+            f"{config.ASSISTANT_NAME}:[/] {exc}\n"
+            f"[{config.UI_COLOR_DIM}]O Ollama está rodando? "
+            f"Tente: ollama serve[/]"
         )
         sys.exit(1)
 
@@ -385,7 +395,8 @@ def _novo_ctx(chain: OraculoChain, out) -> dict:
 def _run_inline(chain: OraculoChain) -> None:
     """Modo clássico: desenha no buffer normal, rolagem nativa do terminal."""
     ui.clear_screen(console)
-    show_splash(chain.model_name, recent_sessions=history_mod.load_recent())
+    show_splash(chain.model_name, recent_sessions=history_mod.load_recent(),
+                fullscreen=False)
     ctx = _novo_ctx(chain, console)
     box = prompt_mod.InputBox(console, lambda: _status(ctx))
 
@@ -416,7 +427,7 @@ def _run_fullscreen(chain: OraculoChain) -> None:
         sessao.on_toggle_thinking = lambda: ctx.update(
             show_thinking=not ctx.get("show_thinking", False))
         show_splash(chain.model_name, recent_sessions=history_mod.load_recent(),
-                    out=sessao.console)
+                    out=sessao.console, fullscreen=True)
 
         def _ask(_prompt: str = "") -> str:
             return sessao.ask()
@@ -454,7 +465,7 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
             else:
                 user_input = ask()
         except (EOFError, KeyboardInterrupt):
-            ui.notice(console, "Encerrando...", style="cyan")
+            ui.ok(console, "Encerrando...")
             break
 
         if not user_input:
@@ -494,6 +505,9 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
             # O throttle (_REFRESH_INTERVAL) evita reparsear o Markdown a cada
             # token; menos repaints = menos uso da iGPU (compositor).
             last_render = 0.0
+            # Relógio do turno: a linha de espera e o bloco de raciocínio
+            # mostram o mesmo contador, contado do início da geração.
+            turno_t0 = time.monotonic()
 
             def _toggle_thinking() -> None:
                 ctx["show_thinking"] = not ctx.get("show_thinking", False)
@@ -515,7 +529,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                         reasoning.append(text)
                         if now - last_render >= _REFRESH_INTERVAL:
                             live.update(ui.indent(_thinking_view(
-                                ctx.get("show_thinking"), "".join(reasoning))))
+                                ctx.get("show_thinking"), "".join(reasoning),
+                                turno_t0)))
                             last_render = now
                         continue
                     # resposta
@@ -526,7 +541,7 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                     if speaker:
                         speaker.feed(text)
                     if now - last_render >= _REFRESH_INTERVAL:
-                        live.update(ui.indent(Markdown("".join(chunks))))
+                        live.update(ui.body_view(Markdown("".join(chunks))))
                         last_render = now
             response = "".join(chunks)
             ui.body(console, Markdown(response))

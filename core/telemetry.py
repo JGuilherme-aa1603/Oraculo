@@ -146,7 +146,8 @@ def summary_line(record: dict) -> str:
 def _print_summary(record: dict) -> None:
     from rich.console import Console
 
-    Console().print("[dim cyan]telemetria[/] [dim]" + summary_line(record) + "[/]")
+    Console().print(f"[{config.UI_COLOR_BORDER}]telemetria[/] "
+                    f"[{config.UI_COLOR_FAINT}]" + summary_line(record) + "[/]")
 
 
 def _append_jsonl(record: dict) -> None:

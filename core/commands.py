@@ -12,6 +12,8 @@ O loop principal passa um dicionário de contexto mutável (`ctx`) com:
 
 from pathlib import Path
 
+from rich.text import Text
+
 import config
 from core import llm as llm_mod, ui
 
@@ -45,11 +47,19 @@ def _ajuda_text() -> str:
     assinaturas = {cmd: f"{cmd} {arg}".strip() for cmd, arg, _ in COMMAND_SPECS}
     largura = max(len(s) for s in assinaturas.values())
     # O recuo de 2 alinha o bloco com o eco da mensagem no transcript (core.ui).
-    linhas = ["  [bold cyan]Comandos disponíveis[/]"]
+    linhas = [f"  [bold {config.UI_COLOR_ACCENT}]Comandos disponíveis[/]"]
     for cmd, arg, desc in COMMAND_SPECS:
-        rotulo = f"[bright_cyan]{cmd}[/]" + (f" [dim]{arg}[/]" if arg else "")
+        rotulo = f"[{config.UI_COLOR_PROMPT}]{cmd}[/]"
+        if arg:
+            rotulo += f" [{config.UI_COLOR_FAINT}]{arg}[/]"
         preenche = " " * (largura - len(assinaturas[cmd]))
-        linhas.append(f"    {rotulo}{preenche}  {desc}")
+        linhas.append(f"    {rotulo}{preenche}  "
+                      f"[{config.UI_COLOR_SOFT}]{desc}[/]")
+    # A ajuda termina contando como se digita um comando — é a informação que
+    # falta a quem acabou de descobrir que existem comandos.
+    linhas.append(f"  [{config.UI_COLOR_FAINT}]{config.UI_GLYPH_NOTICE}  "
+                  f"[{config.UI_COLOR_PROMPT}]/[/] abre o autocomplete · "
+                  f"Tab escolhe · Alt+Enter quebra linha[/]")
     return "\n".join(linhas)
 
 
@@ -75,17 +85,19 @@ def _handle_modelo(arg: str, ctx: dict) -> None:
     if not arg:
         models = _list_models()
         if not models:
-            console.print("[yellow]Não consegui listar os modelos do Ollama.[/]")
+            ui.warn(console, "Não consegui listar os modelos do Ollama.")
             return
-        console.print("  [bold cyan]Modelos disponíveis:[/]")
+        ui.heading(console, "Modelos disponíveis:")
         for m in models:
-            mark = "  [bright_white](atual)[/]" if m == chain.model_name else ""
-            console.print(f"    • [bright_white]{m}[/]{mark}")
-        console.print("  [dim]Use /modelo <nome> para trocar.[/]")
+            mark = (f"  [{config.UI_COLOR_ACCENT}](atual)[/]"
+                    if m == chain.model_name else "")
+            console.print(f"    • [{config.UI_COLOR_BRIGHT}]{m}[/]{mark}")
+        ui.hint(console, f"Use [{config.UI_COLOR_PROMPT}]/modelo <nome>[/] "
+                         f"para trocar.")
         return
 
     chain.set_model(arg)
-    ui.notice(console, f"Modelo trocado para {arg}.", style="cyan")
+    ui.ok(console, f"Modelo trocado para {arg}.")
 
     # set_model preserva o reasoning; se o novo modelo não suporta thinking,
     # desliga para o próximo turno não falhar com erro 400.
@@ -107,10 +119,9 @@ def _handle_think(ctx: dict) -> None:
     ctx["thinking"] = want
     chain.set_thinking(want)
     if want:
-        ui.notice(console, "Raciocínio ativado — Ctrl+O mostra/oculta o texto.",
-                  style="cyan")
+        ui.ok(console, "Raciocínio ativado — Ctrl+O mostra/oculta o texto.")
     else:
-        ui.notice(console, "Raciocínio (thinking) desativado.", style="cyan")
+        ui.ok(console, "Raciocínio (thinking) desativado.")
 
 
 def _handle_vad(ctx: dict) -> None:
@@ -129,11 +140,11 @@ def _handle_vad(ctx: dict) -> None:
 
     config.VAD_ENABLED = quer
     if quer:
-        ui.notice(console, "VAD ativado — a gravação para sozinha quando você "
-                  "parar de falar.", style="cyan")
+        ui.ok(console, "VAD ativado — a gravação para sozinha quando você "
+                       "parar de falar.")
     else:
-        ui.notice(console, "VAD desativado — Enter para gravar, Enter de novo "
-                  "para parar.", style="cyan")
+        ui.ok(console, "VAD desativado — Enter para gravar, Enter de novo "
+                       "para parar.")
 
 
 def _handle_despertar(ctx: dict) -> None:
@@ -158,17 +169,32 @@ def _handle_despertar(ctx: dict) -> None:
 
     config.WAKE_ENABLED = quer
     if quer:
-        ui.notice(console,
-                  f'Escuta ativada — o microfone fica aberto e eu respondo '
-                  f'quando você disser "{config.WAKE_WORD}".', style="cyan")
+        ui.ok(console,
+              f'Escuta ativada — o microfone fica aberto e eu respondo '
+              f'quando você disser "{config.WAKE_WORD}".')
         ui.notice(console,
                   "  Nada é gravado nem transcrito antes disso. Ctrl+C encerra "
                   "a escuta.")
         if not ctx.get("voice_mode"):
             ui.notice(console, "  Só vale no modo voz — use /voz para entrar.")
     else:
-        ui.notice(console, "Escuta desativada — o microfone só abre quando você "
-                  "pedir.", style="cyan")
+        ui.ok(console, "Escuta desativada — o microfone só abre quando você "
+                       "pedir.")
+
+
+def _stt_detalhes() -> dict[str, str]:
+    """Uma linha por motor, lida da configuração de verdade.
+
+    Escolher entre whisper e parakeet é escolher entre GPU e limite de duração;
+    sem esses números a lista é só dois nomes, e a decisão fica adivinhada.
+    """
+    return {
+        "whisper": f"{config.WHISPER_MODEL} · "
+                   f"{config.WHISPER_DEVICE.upper()} · "
+                   f"{config.WHISPER_COMPUTE_TYPE}",
+        "parakeet": f"CPU · limite ~{config.TRANSCRIBE_PARAKEET_LIMIT:.0f}s "
+                    f"por clipe",
+    }
 
 
 def _handle_stt(arg: str, ctx: dict) -> None:
@@ -176,11 +202,17 @@ def _handle_stt(arg: str, ctx: dict) -> None:
     arg = arg.lower()
 
     if not arg:
-        console.print("  [bold cyan]Motores de transcrição (STT):[/]")
+        ui.heading(console, "Motores de transcrição (STT):")
+        detalhes = _stt_detalhes()
         for engine in STT_ENGINES:
-            mark = "  [bright_white](atual)[/]" if engine == config.STT_ENGINE else ""
-            console.print(f"    • [bright_white]{engine}[/]{mark}")
-        console.print("  [dim]Use /stt <motor> para trocar.[/]")
+            mark = (f"  [{config.UI_COLOR_ACCENT}](atual)[/]"
+                    if engine == config.STT_ENGINE else "")
+            info = detalhes.get(engine, "")
+            cauda = f"  [{config.UI_COLOR_FAINT}]{info}[/]" if info else ""
+            console.print(f"    • [{config.UI_COLOR_BRIGHT}]{engine}[/]"
+                          f"{mark}{cauda}")
+        ui.hint(console, f"Use [{config.UI_COLOR_PROMPT}]/stt <motor>[/] "
+                         f"para trocar.")
         return
 
     if arg not in STT_ENGINES:
@@ -193,7 +225,7 @@ def _handle_stt(arg: str, ctx: dict) -> None:
     from core import stt
 
     config.STT_ENGINE = arg
-    ui.notice(console, f"Motor de STT trocado para {arg}.", style="cyan")
+    ui.ok(console, f"Motor de STT trocado para {arg}.")
     if not stt.available():
         ui.warn(console, f"Dependências de '{arg}' não instaladas — a transcrição "
                 f"vai falhar até instalá-las.")
@@ -202,9 +234,11 @@ def _handle_stt(arg: str, ctx: dict) -> None:
 _SAVE_FLAGS = {"--salvar", "-s"}
 
 TRANSCREVER_USO = (
-    "[dim]Uso:[/] [bright_cyan]/transcrever <arquivo>[/] "
-    "[dim][--salvar][/]\n"
-    "[dim]  --salvar grava a transcrição em Markdown ao lado do áudio.[/]"
+    f"  [{config.UI_COLOR_FAINT}]Uso:[/] "
+    f"[{config.UI_COLOR_PROMPT}]/transcrever <arquivo>[/] "
+    f"[{config.UI_COLOR_FAINT}][--salvar][/]\n"
+    f"  [{config.UI_COLOR_FAINT}]--salvar grava a transcrição em Markdown "
+    f"ao lado do áudio.[/]"
 )
 
 
@@ -232,7 +266,8 @@ def _com_progresso(segments, status, secs: float | None):
 
     for seg in segments:
         total = f"/{hms(secs)}" if secs else ""
-        status.update(f"[dim]Transcrevendo... {hms(seg[1])}{total}[/]")
+        status.update(f"[{config.UI_COLOR_SOFT}]Transcrevendo...[/] "
+                      f"[{config.UI_COLOR_FAINT}]{hms(seg[1])}{total}[/]")
         yield seg
 
 
@@ -246,66 +281,73 @@ def _handle_transcrever(arg: str, ctx: dict) -> None:
     caminho, salvar = _parse_alvo(arg)
     path = Path(caminho).expanduser()
     if not path.is_file():
-        console.print(f"[yellow]Arquivo não encontrado:[/] {path}")
+        ui.warn(console, f"Arquivo não encontrado: {path}")
         return
 
     from core import stt, transcript
 
     if not stt.available():
-        console.print(f"[yellow]O motor '{config.STT_ENGINE}' não está "
-                      f"instalado — veja /stt para trocar de motor.[/]")
+        ui.warn(console, f"O motor '{config.STT_ENGINE}' não está instalado — "
+                         f"veja /stt para trocar de motor.")
         return
 
     if path.suffix.lower() not in config.TRANSCRIBE_EXTENSIONS:
-        console.print(f"[yellow]'{path.suffix}' não parece um formato de áudio; "
-                      f"vou tentar mesmo assim.[/]")
+        ui.warn(console, f"'{path.suffix}' não parece um formato de áudio; "
+                         f"vou tentar mesmo assim.")
 
     secs = stt.duration(str(path))
     limite = config.TRANSCRIBE_PARAKEET_LIMIT
     if config.STT_ENGINE == "parakeet" and secs and secs > limite:
-        console.print(f"[yellow]O parakeet trunca clipes acima de "
-                      f"{limite:.0f}s. Para este áudio, use /stt whisper.[/]")
+        ui.warn(console, f"O parakeet trunca clipes acima de {limite:.0f}s. "
+                         f"Para este áudio, use /stt whisper.")
 
-    dur = f"  [dim]({transcript.hms(secs)})[/]" if secs else ""
-    console.print(f"[bold cyan]Transcrevendo[/] [bright_white]{path.name}[/]{dur}"
-                  f"  [dim]· {transcript.engine_label()}[/]")
+    dur = f"  [{config.UI_COLOR_FAINT}]({transcript.hms(secs)})[/]" if secs else ""
+    console.print(f"  [bold {config.UI_COLOR_ACCENT}]Transcrevendo[/] "
+                  f"[{config.UI_COLOR_BRIGHT}]{path.name}[/]{dur}"
+                  f"  [{config.UI_COLOR_FAINT}]· {transcript.engine_label()}[/]")
 
     paras: list[tuple[float, str]] = []
     interrompido = False
     try:
-        with console.status("[dim]Carregando o motor de transcrição...[/]",
-                            spinner="dots") as status:
+        with console.status(f"[{config.UI_COLOR_SOFT}]Carregando o motor de "
+                            f"transcrição...[/]", spinner=ui.IRIS) as status:
             segments = _com_progresso(stt.transcribe_segments(str(path)),
                                       status, secs)
             for start, texto in transcript.paragraphs(segments):
                 paras.append((start, texto))
-                marca = f"[dim][{transcript.hms(start)}][/] " \
-                    if config.TRANSCRIBE_TIMESTAMPS else ""
-                console.print(f"{marca}{texto}")
+                # Montado como Text, não como marcação: o parágrafo vem da
+                # transcrição e um "[" solto no meio da fala viraria uma tag.
+                linha = Text("  ")
+                if config.TRANSCRIBE_TIMESTAMPS:
+                    linha.append(f"[{transcript.hms(start)}]  ",
+                                 style=config.UI_COLOR_FAINT)
+                linha.append(texto, style=config.UI_COLOR_BODY)
+                console.print(linha)
     except KeyboardInterrupt:
         interrompido = True
-        console.print("\n[yellow](transcrição interrompida)[/]")
+        ui.warn(console, "transcrição interrompida")
     except RuntimeError as exc:      # dependência faltando
-        console.print(f"[yellow]{exc}[/]")
+        ui.warn(console, str(exc))
         return
     except Exception as exc:         # noqa: BLE001 — áudio ilegível, disco, etc.
-        console.print(f"[bold red]Erro ao transcrever:[/] {exc}")
+        ui.error(console, f"Erro ao transcrever: {exc}")
         return
 
     if not paras:
-        console.print("[dim](nada foi transcrito — o áudio tem fala?)[/]")
+        ui.notice(console, "nada foi transcrito — o áudio tem fala?")
         return
 
     if salvar:
         try:
             destino = transcript.save(paras, path, secs)
-            parcial = " [dim](parcial)[/]" if interrompido else ""
-            console.print(f"[cyan]Transcrição salva em[/] "
-                          f"[bright_white]{destino}[/]{parcial}")
+            parcial = f" [{config.UI_COLOR_FAINT}](parcial)[/]" if interrompido else ""
+            ui.hint(console, f"[{config.UI_COLOR_ACCENT}]Transcrição salva em[/] "
+                             f"[{config.UI_COLOR_BRIGHT}]{destino}[/]{parcial}")
         except OSError as exc:
-            console.print(f"[bold red]Não consegui salvar:[/] {exc}")
+            ui.error(console, f"Não consegui salvar: {exc}")
     elif not interrompido:
-        console.print("[dim](use --salvar para gravar em Markdown)[/]")
+        ui.hint(console, f"use [{config.UI_COLOR_PROMPT}]--salvar[/] para "
+                         f"gravar em Markdown")
 
 
 def handle(raw: str, ctx: dict) -> bool:
@@ -320,7 +362,7 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd in config.EXIT_COMMANDS:
         ctx["running"] = False
-        ui.notice(console, "Encerrando...", style="cyan")
+        ui.ok(console, "Encerrando...")
         return True
 
     if cmd in {"/ajuda", "/help", "/?"}:
@@ -329,13 +371,13 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/limpar":
         ctx["chain"].memory.clear()
-        ui.notice(console, "Memória da sessão limpa.", style="cyan")
+        ui.ok(console, "Memória da sessão limpa.")
         return True
 
     if cmd == "/voz":
         ctx["voice_mode"] = not ctx["voice_mode"]
         estado = "ativado" if ctx["voice_mode"] else "desativado"
-        ui.notice(console, f"Modo voz {estado}.", style="cyan")
+        ui.ok(console, f"Modo voz {estado}.")
         return True
 
     if cmd == "/vad":

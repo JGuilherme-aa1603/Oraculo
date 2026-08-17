@@ -195,12 +195,32 @@ UI_GUTTER = 5                   # recuo do corpo da resposta (alinha sob o nome)
 UI_GLYPH_ASSISTANT = "●"        # marca o início de um turno do Oráculo
 UI_GLYPH_USER = ">"             # eco da mensagem enviada
 UI_GLYPH_NOTICE = "⎿"           # avisos/resultados subordinados ao turno
+UI_GLYPH_RULE = "│"             # barra na margem (bloco de raciocínio)
 
-# Paleta (nomes de cor do rich; a barra de status traduz para prompt_toolkit)
-UI_COLOR_ACCENT = "bright_cyan"  # Oráculo, glifos ativos
-UI_COLOR_USER = "cyan"           # eco do usuário
-UI_COLOR_DIM = "grey42"          # métricas, rodapés
-UI_COLOR_FAINT = "grey30"        # dicas de tecla
+# --- Paleta ---
+# Hex explícito, não nome de cor do rich: os nomes ("cyan", "grey42") resolvem
+# para a paleta do EMULADOR, então o mesmo código sai verde num terminal e azul
+# noutro, e "grey42" some em fundo claro. Com hex, o desenho é o mesmo em
+# qualquer terminal com truecolor — e é a única forma de casar exatamente com a
+# referência visual. O prompt_toolkit (core/prompt.py) come o mesmo hex direto.
+UI_COLOR_ACCENT = "#64f0c8"     # Oráculo, títulos, estado ativo (ciano/menta)
+UI_COLOR_PROMPT = "#6c4cff"     # glifo ">", nomes de comando (roxo)
+UI_COLOR_BRIGHT = "#f4f0e6"     # texto que o usuário escreveu, valores em foco
+UI_COLOR_BODY = "#cdd6e6"       # corpo da resposta
+UI_COLOR_SOFT = "#b7c1d4"       # texto secundário (descrições, listas)
+UI_COLOR_DIM = "#7f8aa3"        # rótulos discretos
+UI_COLOR_FAINT = "#5b6478"      # métricas, dicas de tecla, separadores
+UI_COLOR_BORDER = "#2c8f77"     # molduras e divisores
+UI_COLOR_ALERT = "#ec3013"      # avisos, erros, gravação em curso
+
+# Compatibilidade: o eco do usuário usa o mesmo roxo do prompt.
+UI_COLOR_USER = UI_COLOR_PROMPT
+
+# A íris — o glifo que gira enquanto o Oráculo pensa, fala ou transcreve, e que
+# na splash aparece parado entre parênteses. Quatro quadros a ~6/s: rápido o
+# bastante para parecer vivo, lento o bastante para não piscar.
+UI_IRIS_FRAMES = ("✦", "✧", "✜", "✧")
+UI_IRIS_INTERVAL_MS = 160
 
 # Rodapé por turno com as métricas da telemetria (latência, tokens/s). Independe
 # de TELEMETRY_ENABLED: aqui é só exibição, nada é gravado em disco.

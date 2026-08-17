@@ -238,9 +238,12 @@ class Transcript:
 
     # -- renderização ----------------------------------------------------
     def _render_block(self, block: _PrintBlock) -> list[str]:
+        from core import ui
+
         buf = io.StringIO()
-        console = Console(file=buf, width=self._width, force_terminal=True,
-                          color_system="truecolor", highlight=False, soft_wrap=False)
+        console = ui.make_console(file=buf, width=self._width,
+                                  force_terminal=True, color_system="truecolor",
+                                  soft_wrap=False)
         console.print(*block.args, **block.kwargs)
         linhas = buf.getvalue().split("\n")
         if linhas and linhas[-1] == "":
@@ -321,9 +324,12 @@ class TranscriptConsole(Console):
     """
 
     def __init__(self, transcript: Transcript) -> None:
+        from core import ui
+
         self._transcript = transcript
         super().__init__(file=io.StringIO(), force_terminal=True,
-                         color_system="truecolor", highlight=False)
+                         color_system="truecolor", highlight=False,
+                         theme=ui.THEME)
 
     def print(self, *args, **kwargs) -> None:  # noqa: A003
         self._transcript.append(args, kwargs)
@@ -441,21 +447,31 @@ class FullscreenSession:
         corpo = Window(_TranscriptControl(_fragmentos), wrap_lines=False)
 
         def _status_com_dica() -> dict:
+            """Completa a barra com o que só a tela sabe.
+
+            `state` é o que está acontecendo agora (à esquerda, em acento) e
+            `hint` é o que dá para fazer daqui (à direita, apagado). Separar os
+            dois é o que evita a dica de teclado ficar piscando entre "copiado"
+            e "arraste seleciona" a cada seleção.
+            """
             estado = dict(status_fn())
             # A confirmação da cópia aparece por alguns segundos e some sozinha
             # (o refresh_interval da app garante o repaint).
             if self.copiado_em and time.monotonic() - self.copiado_em < 3:
                 # O método aparece no aviso: se o terminal ignorar o OSC 52, a
                 # menção é a única pista de por que nada foi para o clipboard.
-                estado["hint"] = ("copiado via terminal (OSC 52)"
-                                  if self.copiado_metodo == "osc52"
-                                  else "copiado para a área de transferência")
+                estado["state"] = ("copiado via terminal (OSC 52)"
+                                   if self.copiado_metodo == "osc52"
+                                   else "seleção copiada")
             elif self.transcript.atrasado:
                 # Estado mais importante que qualquer dica: sem isto, a resposta
                 # chegando fora da vista parece a interface travada.
-                estado["hint"] = "rolagem pausada · Ctrl+End volta ao fim"
+                estado["state"] = "rolagem pausada"
+
+            if self.transcript.atrasado:
+                estado["hint"] = "Ctrl+End volta ao fim"
             elif not self.mouse:
-                estado["hint"] = "mouse solto · F2 recaptura"
+                estado["hint"] = "mouse solto · F2 recaptura · PgUp/PgDn rola"
             else:
                 estado["hint"] = ("arraste seleciona · 2x palavra · 3x linha · "
                                   "PgUp/PgDn rola")

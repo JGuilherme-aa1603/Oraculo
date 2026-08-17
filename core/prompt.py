@@ -3,10 +3,10 @@
 Desenha uma caixa que reflui conforme você digita, com a barra de status logo
 abaixo (modelo, modo, thinking, memória):
 
-    ╭──────────────────────────────────────────╮
+    ┌──────────────────────────────────────────┐
     │ > /tr                                    │
-    ╰──────────────────────────────────────────╯
-      gemma4:e4b · texto · think off · mem 8/10
+    └──────────────────────────────────────────┘
+      gemma4:e4b · texto · think off · mem 8/10        Enter envia
 
 Por que uma `Application` inline em vez do `PromptSession` padrão: o prompt comum
 do prompt_toolkit não fecha a borda direita (a linha do texto tem largura variável),
@@ -207,12 +207,13 @@ def _janela_entrada(buffer, **kwargs):
     return _Entrada(**kwargs)
 
 
-def _rounded_frame(body):
-    """Moldura arredondada ao redor do corpo.
+def _frame(body):
+    """Moldura de canto vivo ao redor do corpo.
 
-    O `Frame` do prompt_toolkit fixa os cantos em ┌┐└┘ (a classe Border tem os
-    caracteres hard-coded, sem parâmetro), então a moldura é remontada aqui com
-    os cantos arredondados para casar com a paleta do resto da interface.
+    Remontada à mão em vez de usar o `Frame` do prompt_toolkit porque a classe
+    `Border` dele tem os caracteres hard-coded, sem parâmetro — e é aqui que a
+    moldura ganha a cor da paleta. Os cantos são retos de propósito: a moldura é
+    estrutura, e o sistema visual do projeto não arredonda canto nenhum.
     """
     from functools import partial
 
@@ -220,36 +221,58 @@ def _rounded_frame(body):
 
     fill = partial(Window, style="class:frame.border")
     return HSplit([
-        VSplit([fill(width=1, height=1, char="╭"),
+        VSplit([fill(width=1, height=1, char="┌"),
                 fill(char="─"),
-                fill(width=1, height=1, char="╮")], height=1),
+                fill(width=1, height=1, char="┐")], height=1),
         VSplit([fill(width=1, char="│"), body, fill(width=1, char="│")]),
-        VSplit([fill(width=1, height=1, char="╰"),
+        VSplit([fill(width=1, height=1, char="└"),
                 fill(char="─"),
-                fill(width=1, height=1, char="╯")], height=1),
+                fill(width=1, height=1, char="┘")], height=1),
     ])
 
 
 def _status_fragments(status: dict, largura: int) -> list[tuple[str, str]]:
     """Barra de status abaixo da caixa, em fragmentos (estilo, texto).
 
-    A dica de teclas é o primeiro item a cair quando o terminal é estreito —
-    deixar a barra quebrar em duas linhas desalinharia tudo abaixo da caixa.
+    Três grupos, com pesos diferentes de propósito:
+
+        gemma4:e4b · texto · think off · mem 3/10 · ouvindo            <dica>
+        ^ acento     ^ estado permanente          ^ acontecendo agora  ^ direita
+
+    A dica de teclas encosta na borda direita e é o primeiro item a cair quando
+    o terminal é estreito — deixar a barra quebrar em duas linhas desalinharia
+    tudo abaixo da caixa. O `state` cai depois dela, e os flags por último.
     """
     esquerda = f"  {status['model']}"
     partes: list[tuple[str, str]] = [("class:status.accent", esquerda)]
     usado = len(esquerda)
+
+    def _separado(trecho: str, estilo: str) -> bool:
+        """Acrescenta '  ·  trecho' se couber. False = não coube."""
+        nonlocal usado
+        if usado + len(trecho) + 5 > largura:
+            return False
+        partes.append(("class:status.sep", "  ·  "))
+        partes.append((estilo, trecho))
+        usado += len(trecho) + 5
+        return True
+
     for rotulo in status["flags"]:
-        trecho = f"  ·  {rotulo}"
-        if usado + len(trecho) > largura:
+        if not _separado(rotulo, "class:status"):
             return partes
-        partes.append(("class:status", trecho))
-        usado += len(trecho)
+
+    # O que está acontecendo agora (ouvindo, rolagem pausada, copiado): é a
+    # informação mais volátil da barra, então ganha o acento.
+    estado = status.get("state")
+    if estado:
+        _separado(estado, "class:status.state")
+
     # O modo tela cheia manda a própria dica (rolagem, F2), que não faz sentido
     # no inline.
     dica = status.get("hint") or _HINT
-    if usado + len(dica) + 3 <= largura:
-        partes.append(("class:status.hint", f"   {dica}"))
+    folga = largura - usado - len(dica) - 2
+    if folga >= 3:
+        partes.append(("class:status.hint", " " * folga + dica))
     return partes
 
 
@@ -347,17 +370,20 @@ def build_editor(status_fn: Callable[[], dict],
         buffer,
         content=BufferControl(
             buffer=buffer,
-            input_processors=[BeforeInput(f"{config.UI_GLYPH_USER} ",
+            # Um espaço antes do glifo: sem ele o ">" encosta na borda esquerda
+            # e a caixa fica apertada de um lado só.
+            input_processors=[BeforeInput(f" {config.UI_GLYPH_USER} ",
                                           style="class:prompt")],
         ),
         wrap_lines=True,
+        style="class:input",
         height=Dimension(min=1, max=8),
         # Sem isto, no modo tela cheia o HSplit entrega a sobra vertical para a
         # caixa (ela aceita até 8 linhas) e ela abre linhas em branco. A sobra
         # tem que ir toda para o transcript.
         dont_extend_height=True,
     )
-    moldura = _rounded_frame(entrada)
+    moldura = _frame(entrada)
 
     def _status_texto():
         from prompt_toolkit.application import get_app
@@ -374,16 +400,24 @@ def build_editor(status_fn: Callable[[], dict],
         filter=has_completions,
     )
 
+    # Mesma paleta do transcript, vinda do config: o prompt_toolkit não fala
+    # rich, então os hex são repassados diretamente. É por isso que a paleta é
+    # hex e não nome de cor — nome do rich não teria tradução aqui.
     estilo = Style.from_dict({
-        "frame.border": "#5f8787",
-        "prompt": "#00d7d7 bold",
-        "status": "#6c6c6c",
-        "status.accent": "#00d7d7",
-        "status.hint": "#444444",
-        "completion-menu.completion": "bg:#1c1c1c #b2b2b2",
-        "completion-menu.completion.current": "bg:#00afaf #000000",
-        "completion-menu.meta.completion": "bg:#1c1c1c #6c6c6c",
-        "completion-menu.meta.completion.current": "bg:#008787 #000000",
+        "frame.border": config.UI_COLOR_BORDER,
+        "prompt": f"{config.UI_COLOR_PROMPT} bold",
+        "input": config.UI_COLOR_BRIGHT,
+        "status": config.UI_COLOR_DIM,
+        "status.accent": f"{config.UI_COLOR_ACCENT} bold",
+        "status.state": config.UI_COLOR_ACCENT,
+        "status.sep": config.UI_COLOR_FAINT,
+        "status.hint": config.UI_COLOR_FAINT,
+        "completion-menu.completion": f"bg:#12143a {config.UI_COLOR_SOFT}",
+        "completion-menu.completion.current":
+            f"bg:{config.UI_COLOR_BORDER} #05060f",
+        "completion-menu.meta.completion": f"bg:#12143a {config.UI_COLOR_FAINT}",
+        "completion-menu.meta.completion.current":
+            f"bg:{config.UI_COLOR_ACCENT} #05060f",
     })
 
     # Um único container: um mesmo objeto de layout não pode ser montado em dois

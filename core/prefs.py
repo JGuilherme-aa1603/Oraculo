@@ -11,6 +11,14 @@ do usuário, nunca um padrão herdado". Herdar por arquivo é exatamente herdar.
 Quem quiser a escuta ligada de fábrica muda o `config.py`, que é um ato
 deliberado e visível; o `/despertar` continua valendo só para a sessão da vez.
 
+**O `/notas` (Fase 4) ENTRA, e pelo mesmo critério.** Ele não abre o microfone
+para a sala: lê notas suas, na sua máquina, que você mandou indexar. É da
+família do `/vad` e do `/stt`, não da wake word. Mas ele é aplicado pelo main, e
+não por `_ESPELHA_CONFIG`, porque ligar depende de o índice existir e carregar —
+escrever `RAG_ENABLED = True` sem o índice na mão poria o Oráculo anunciando no
+system prompt uma capacidade que ele não tem, que é justamente o que o
+invariante 1 proíbe.
+
 Duas regras que o desenho segue:
 
 - **Lista branca, com tipo.** Nada de despejar o `ctx` inteiro: só as chaves de
@@ -46,6 +54,7 @@ _CAMPOS: dict[str, type] = {
     "tts": str,
     "vad": bool,
     "dono": bool,
+    "notas": bool,
 }
 
 # Preferências que apenas espelham um flag do config. As outras (modelo, think,

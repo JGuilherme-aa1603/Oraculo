@@ -162,6 +162,8 @@ def _status(ctx: dict) -> dict:
     flags.append("think on" if ctx.get("thinking") else "think off")
     if config.LOCUTOR_ENABLED:
         flags.append("só você")
+    if config.RAG_ENABLED:
+        flags.append("notas")
     if chain is not None:
         # Memória em pares (pergunta+resposta), que é como a janela é cortada.
         with contextlib.suppress(Exception):
@@ -472,6 +474,27 @@ def _novo_ctx(chain: OraculoChain, out, preferencias: dict | None = None) -> dic
     if quer_thinking and llm_mod.supports_thinking(chain.model_name):
         ctx["thinking"] = True
         chain.set_thinking(True)
+
+    # A consulta às notas é herdada, mas só se o índice REALMENTE abrir. Uma
+    # preferência é um desejo, não uma garantia: o vault pode ter sumido, o
+    # modelo de embedding pode ter mudado. Ligar assim mesmo poria o system
+    # prompt anunciando que o Oráculo lê as suas notas enquanto ele não lê
+    # nenhuma — o invariante 1 quebrado pelo caminho mais silencioso possível.
+    padrao_notas = config.RAG_ENABLED      # o valor de fábrica, antes de mexer
+    config.RAG_ENABLED = False
+    if prefs.get("notas", padrao_notas):
+        from core import rag
+
+        try:
+            consulta = rag.Consulta.abrir()
+        except rag.RagError as exc:
+            ui.warn(out, f"Notas desligadas: {exc}")
+        else:
+            chain.set_notas(consulta)
+            ctx["rag"] = consulta
+            config.RAG_ENABLED = True
+            if consulta.indice.desatualizado():
+                ui.warn(out, "O vault mudou desde a indexação — rode /indexar.")
     return ctx
 
 
@@ -666,6 +689,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                         last_render = now
             response = "".join(chunks)
             ui.body(console, Markdown(response))
+            if config.RAG_MOSTRA_FONTES:
+                ui.sources(console, chain.last_sources)
             history.record("assistant", response)
             tel.set_llm(**chain.last_usage)
         except KeyboardInterrupt:

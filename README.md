@@ -396,11 +396,15 @@ ignorou", que a resposta sozinha não distingue.
 ```
 
 A calibração compara perguntas que o vault responde — as **suas**, em
-`~/.oraculo/rag/perguntas.txt` — com perguntas fora do domínio. Neste vault a folga é de
-oito milésimos (0,668 contra 0,676), então o número é frágil por natureza: vale
-acrescentar perguntas ao arquivo e remedir depois de escrever notas novas. E o comando
-se recusa a inventar o lado positivo sozinho, porque uma frase copiada da nota mede a
-facilidade, não a busca.
+`~/.oraculo/rag/perguntas.txt` — com perguntas fora do domínio. E o comando se recusa a
+inventar o lado positivo sozinho, porque uma frase copiada da nota mede a facilidade, não
+a busca.
+
+Não espere separação limpa: medido com 30 perguntas fora do domínio, umas 10% delas
+arrastam um trecho irrelevante. Isso é aceito de propósito — o limiar pende para o lado
+permissivo, porque uma nota que não chega é invisível enquanto um trecho irrelevante é
+descartado pelo modelo (testado: 3 de 3). O `mxbai-embed-large` foi avaliado e não
+melhora a cauda, que é o que importa aqui.
 
 **O system prompt muda junto com a capacidade.** Com `/notas` ligado o Oráculo declara
 que lê as suas notas indexadas; desligado, ele volta a declarar que não acessa arquivo

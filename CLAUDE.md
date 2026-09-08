@@ -291,11 +291,43 @@ Regras de código:
   não tem essa nota — fala da verificação de voz só como "passo 3c" futuro. A busca
   acertou ao não achar; o rótulo é que estava errado, exatamente como "oráculos de
   Delfos" na lista de negativos do wake word.
-- **A folga aqui é de oito milésimos, e o limiar pende para o lado PERMISSIVO.** É o
-  inverso do wake word, e a razão é a assimetria de custo: lá um falso positivo abria o
-  microfone e fazia o Oráculo falar sozinho; aqui um trecho irrelevante só ocupa espaço
-  num bloco que o prompt manda ignorar quando não vier ao caso, enquanto o falso negativo
-  desliga o recurso inteiro em silêncio. Erre para o lado que o modelo consegue corrigir.
+- **Folga medida com amostra pequena é otimista por construção.** Com 10 negativos a
+  calibração dava folga de +0,008 e zero falso positivo; com 30, ela vira **negativa** —
+  aparecem negativos em 0,690, e no limiar de 0,67 passam 3 de 30. Não existe limiar que
+  separe limpo aqui. A primeira medida não estava errada, estava rasa: o extremo de uma
+  distribuição é exatamente o que poucas amostras não enxergam. Vale para qualquer folga
+  deste projeto.
+- **O `mxbai-embed-large` foi testado e não resolve.** Separa melhor na média (d' 3,06
+  contra 2,59) e tem média de negativo bem mais baixa, mas a **cauda é pior**: um negativo
+  em 0,726 contra 0,690 do nomic. Como o limiar é uma estatística de cauda, ganho na média
+  não ajuda. Custava 33% mais índice e 73% mais tempo de indexação. **Ao avaliar um
+  embedding para um portão, olhe o pior negativo, não o d'.**
+- **O limiar pende para o lado PERMISSIVO, e o custo disso foi medido.** É o inverso do
+  wake word: lá um falso positivo abria o microfone. Aqui, nas três perguntas fora do
+  domínio que passam o limiar, o modelo ignorou o trecho irrelevante e respondeu do
+  conhecimento geral em 3 de 3. Trecho ruim é barato porque o modelo descarta; nota que
+  não chega é cara porque ninguém vê.
+- **Todo substantivo que você usar para nomear o texto recuperado, o modelo devolve ao
+  usuário.** A lição custou três rodadas. Com o cabeçalho chamando aquilo de "bloco
+  NOTAS", 4 de 6 respostas mandavam o usuário "consultar o bloco de notas" — um texto que
+  ele não vê. Renomeado para "material de apoio anexado", o modelo passou a falar em "o
+  trecho anexado" e, pior, "o contexto que **você** forneceu", devolvendo ao usuário a
+  autoria de algo que o sistema injetou. Só quando o cabeçalho e as regras passaram a
+  descrever a busca com **verbos**, sem batizar a mensagem, o vazamento zerou (0 em 15
+  turnos, contra 2 em 5). Regra: **fale do que a busca faz, nunca do que ela produz.**
+- **A misatribuição só aparece com HISTÓRICO, e por isso quase passou como resolvida.**
+  Em turno isolado ela não reproduziu em 12 tentativas; numa conversa de cinco turnos
+  aparecia sempre. O mesmo vale para a recusa de responder do conhecimento geral: depois
+  de dois turnos em que a busca não achou nada, "o que causa as marés?" virava "não
+  encontrei isso nas suas notas", sem resposta — o modelo lendo o material recuperado como
+  o limite do que podia dizer (1 acerto em 5). Dizer no cabeçalho que aquilo *não limita*
+  a resposta levou a 5 em 5. **Teste comportamento de RAG em conversa, nunca em turno
+  solto.**
+- **Posição da mensagem não conserta atribuição, e o papel `tool` é pior.** Mover o
+  material para antes do histórico piorou (o modelo passou a mandar o usuário ler o
+  anexo). Mandá-lo com o papel `tool` é aceito pela API **sem erro nenhum** e o gemma4
+  simplesmente ignora o conteúdo — pediu "forneça o texto da busca". Outra falha silenciosa
+  para a coleção: mensagem aceita, conteúdo invisível.
 - **Bloco prometido e não entregue vira invenção.** Com o system prompt anunciando que os
   trechos chegam num bloco NOTAS, um turno sem bloco nenhum deixa uma promessa em aberto —
   e o gemma4 a cumpriu sozinho: escreveu do nada um "NOTAS: **Projeto Voz:** o limiar de

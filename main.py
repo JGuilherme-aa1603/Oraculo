@@ -23,6 +23,7 @@ from core import (
     history as history_mod,
     keyboard,
     llm as llm_mod,
+    prefs as prefs_mod,
     prompt as prompt_mod,
     speaker as speaker_mod,
     telemetry,
@@ -367,10 +368,20 @@ def run_standalone(argv: list[str]) -> int:
 
 
 def main() -> None:
+    # As preferências entram ANTES de tudo: o modelo guardado decide qual chain
+    # instanciar, e os flags de config (STT/TTS/VAD) precisam estar valendo
+    # antes de qualquer módulo lê-los.
+    preferencias = prefs_mod.carregar()
+    prefs_mod.aplicar_ao_config(preferencias)
+
+    # A lista de modelos vai sendo buscada em paralelo com o arranque, para o
+    # autocomplete de /modelo já estar pronto quando a caixa aparecer.
+    commands.prefetch_modelos()
+
     # O modelo é instanciado antes de limpar a tela: se o Ollama estiver fora do
     # ar, a mensagem de erro fica visível em vez de ser apagada logo em seguida.
     try:
-        chain = OraculoChain()
+        chain = OraculoChain(preferencias.get("modelo") or config.OLLAMA_MODEL)
     except Exception as exc:  # noqa: BLE001
         console.print(
             f"[bold {config.UI_COLOR_ALERT}]Falha ao iniciar o "
@@ -380,34 +391,60 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # A faxina roda antes da splash para a lista de "Conversas recentes" já sair
+    # refletindo o que sobrou — mostrar uma conversa que acabou de ser apagada
+    # seria pior que não mostrar nada.
+    removidas = history_mod.limpar_antigas()
+
     if tui.disponivel():
-        _run_fullscreen(chain)
+        _run_fullscreen(chain, preferencias, removidas)
     else:
-        _run_inline(chain)
+        _run_inline(chain, preferencias, removidas)
 
 
-def _novo_ctx(chain: OraculoChain, out) -> dict:
+def _aviso_faxina(out, removidas: int) -> None:
+    """Conta o que a limpeza apagou. Apagar conversa em silêncio seria pior."""
+    if not removidas:
+        return
+    plural = "s" if removidas > 1 else ""
+    ui.notice(out, f"{removidas} conversa{plural} com mais de "
+                   f"{config.SESSIONS_MAX_AGE_DAYS} dias removida{plural} "
+                   f"(config.SESSIONS_MAX_AGE_DAYS).")
+
+
+def _novo_ctx(chain: OraculoChain, out, preferencias: dict | None = None) -> dict:
+    """Estado da sessão. As preferências guardadas vencem o padrão do config."""
+    prefs = preferencias or {}
     ctx = {
         "console": out,
         "chain": chain,
         "running": True,
-        "voice_mode": config.VOICE_MODE_DEFAULT,
+        "voice_mode": prefs.get("voz", config.VOICE_MODE_DEFAULT),
         "thinking": False,
-        "show_thinking": config.SHOW_THINKING_DEFAULT,
+        "show_thinking": prefs.get("mostrar_raciocinio",
+                                   config.SHOW_THINKING_DEFAULT),
     }
-    # Liga o thinking por padrão só se o modelo realmente suportar.
-    if config.THINKING_DEFAULT and llm_mod.supports_thinking(chain.model_name):
+    # A escuta pela palavra de despertar NÃO é lida das preferências, de
+    # propósito: microfone aberto é escolha de cada sessão, nunca herdada de
+    # ontem por um arquivo. Ver core/prefs.py.
+    #
+    # O thinking só liga se o modelo realmente suportar — a preferência é um
+    # desejo, não uma garantia, e o modelo pode ter mudado desde então.
+    quer_thinking = prefs.get("think", config.THINKING_DEFAULT)
+    if quer_thinking and llm_mod.supports_thinking(chain.model_name):
         ctx["thinking"] = True
         chain.set_thinking(True)
     return ctx
 
 
-def _run_inline(chain: OraculoChain) -> None:
+def _run_inline(chain: OraculoChain, preferencias: dict | None = None,
+                removidas: int = 0) -> None:
     """Modo clássico: desenha no buffer normal, rolagem nativa do terminal."""
     ui.clear_screen(console)
     show_splash(chain.model_name, recent_sessions=history_mod.load_recent(),
                 fullscreen=False)
-    ctx = _novo_ctx(chain, console)
+    _aviso_faxina(console, removidas)
+    ctx = _novo_ctx(chain, console, preferencias)
     box = prompt_mod.InputBox(console, lambda: _status(ctx))
 
     def _live():
@@ -435,19 +472,35 @@ def _run_inline(chain: OraculoChain) -> None:
         title_mod.fechar()
 
 
-def _run_fullscreen(chain: OraculoChain) -> None:
+def _alterna_raciocinio(ctx: dict) -> None:
+    """Ctrl+O: mostra/oculta o texto do raciocínio, e lembra a escolha.
+
+    Um só lugar para os dois modos de desenho — no fullscreen quem chama é um
+    atalho do prompt_toolkit, no inline é o observador de tecla em modo raw, e
+    duas cópias divergiriam na hora de gravar a preferência.
+    """
+    novo = not ctx.get("show_thinking", False)
+    ctx["show_thinking"] = novo
+    prefs_mod.gravar(mostrar_raciocinio=novo)
+
+
+def _run_fullscreen(chain: OraculoChain, preferencias: dict | None = None,
+                    removidas: int = 0) -> None:
     """Modo tela cheia: tela alternativa, caixa fixa e rolagem própria."""
-    ctx: dict = {"chain": chain, "voice_mode": config.VOICE_MODE_DEFAULT,
-                 "thinking": False, "running": True}
+    prefs = preferencias or {}
+    # A barra de status pode ser desenhada antes do laço começar, então o ctx
+    # inicial já nasce com as preferências — senão ela anuncia "texto" por um
+    # instante numa sessão que vai abrir em voz.
+    ctx: dict = {"chain": chain, "thinking": False, "running": True,
+                 "voice_mode": prefs.get("voz", config.VOICE_MODE_DEFAULT)}
 
     def loop(sessao) -> None:
-        # O ctx é preenchido aqui porque só agora existe o console do transcript;
-        # a barra de status já pode ter sido desenhada com os valores iniciais.
-        ctx.update(_novo_ctx(chain, sessao.console))
-        sessao.on_toggle_thinking = lambda: ctx.update(
-            show_thinking=not ctx.get("show_thinking", False))
+        # O ctx é preenchido aqui porque só agora existe o console do transcript.
+        ctx.update(_novo_ctx(chain, sessao.console, prefs))
+        sessao.on_toggle_thinking = lambda: _alterna_raciocinio(ctx)
         show_splash(chain.model_name, recent_sessions=history_mod.load_recent(),
                     out=sessao.console, fullscreen=True)
+        _aviso_faxina(sessao.console, removidas)
 
         def _ask(_prompt: str = "") -> str:
             return sessao.ask()
@@ -478,6 +531,9 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
     """
     console = ctx["console"]
     history = history_mod.SessionHistory()
+    # O /retomar troca o arquivo em que esta sessão escreve, então ele precisa
+    # do objeto — e não de uma cópia do caminho, que ficaria desatualizada.
+    ctx["history"] = history
 
     while ctx["running"]:
         title_mod.marcar()
@@ -538,10 +594,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
             # mostram o mesmo contador, contado do início da geração.
             turno_t0 = time.monotonic()
 
-            def _toggle_thinking() -> None:
-                ctx["show_thinking"] = not ctx.get("show_thinking", False)
-
-            with live_factory() as live, watch_ctrl_o(_toggle_thinking):
+            with live_factory() as live, watch_ctrl_o(
+                    lambda: _alterna_raciocinio(ctx)):
                 status = _ThinkingStatus(live, chain.model_name, ctx.get("thinking", False))
                 status.start()
                 for kind, text in chain.stream(user_input):

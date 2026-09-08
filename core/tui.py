@@ -431,6 +431,9 @@ class FullscreenSession:
         self.copiado_metodo = ""
         # Preenchido pelo laço; Ctrl+O alterna a exibição do raciocínio.
         self.on_toggle_thinking: Callable[[], None] = lambda: None
+        # Ctrl+C ocioso pede confirmação: o primeiro limpa a caixa, o segundo
+        # encerra. Guarda QUANDO foi armado, não só que foi.
+        self._sair_armado_em = 0.0
 
         transcript = self.transcript
         sessao = self
@@ -480,6 +483,12 @@ class FullscreenSession:
             e "arraste seleciona" a cada seleção.
             """
             estado = dict(status_fn())
+            # Mais urgente que qualquer outro estado: o próximo Ctrl+C encerra,
+            # e isso precisa estar escrito antes de acontecer.
+            if self._saida_armada():
+                estado["state"] = "Ctrl+C de novo encerra"
+                estado["hint"] = "qualquer tecla cancela"
+                return estado
             # A confirmação da cópia aparece por alguns segundos e some sozinha
             # (o refresh_interval da app garante o repaint).
             if self.copiado_em and time.monotonic() - self.copiado_em < 3:
@@ -504,6 +513,9 @@ class FullscreenSession:
 
         editor = prompt_mod.build_editor(_status_com_dica, on_submit=self._submit)
         self._buffer = editor["buffer"]
+        # Digitar cancela a confirmação de saída: quem voltou a escrever
+        # claramente não estava tentando sair.
+        self._buffer.on_text_changed += lambda _b: self._desarmar_saida()
 
         kb = editor["keys"]
 
@@ -525,12 +537,23 @@ class FullscreenSession:
 
         @kb.add("c-c")
         def _interromper(event) -> None:
-            # Gerando, Ctrl+C corta a resposta; escutando, encerra a escuta;
-            # ocioso, encerra o Oráculo.
+            # Gerando, Ctrl+C corta a resposta; escutando, encerra a escuta.
             if self._ocupado or self._escutando:
                 self.interromper.set()
-            else:
+                return
+            # Ocioso: o primeiro Ctrl+C limpa a caixa, o segundo encerra. Antes
+            # ele encerrava de primeira, e um Ctrl+C dado para "apagar o que
+            # escrevi" — reflexo vindo do shell — fechava o Oráculo levando a
+            # mensagem junto.
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.reset()
+                self._armar_saida()
+                return
+            if self._saida_armada():
                 self._encerrar()
+            else:
+                self._armar_saida()
 
         @kb.add("c-d")
         def _sair(event) -> None:
@@ -592,6 +615,25 @@ class FullscreenSession:
 
         # Repaint pedido pela thread do laço: `invalidate` é seguro entre threads.
         self.transcript.on_change = self._invalidate
+
+    # -- confirmação de saída (Ctrl+C duas vezes) ------------------------
+    def _armar_saida(self) -> None:
+        self._sair_armado_em = time.monotonic()
+        self._invalidate()
+
+    def _saida_armada(self) -> bool:
+        """True se um Ctrl+C recente ainda vale como primeiro toque.
+
+        A janela expira sozinha: um Ctrl+C dado há dez minutos não deveria
+        transformar o próximo num encerramento surpresa.
+        """
+        return (time.monotonic() - self._sair_armado_em
+                < config.CTRL_C_EXIT_WINDOW)
+
+    def _desarmar_saida(self) -> None:
+        if self._sair_armado_em:
+            self._sair_armado_em = 0.0
+            self._invalidate()
 
     # -- ponte com o laço ------------------------------------------------
     def _invalidate(self) -> None:

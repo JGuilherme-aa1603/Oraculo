@@ -83,9 +83,38 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
 - `/transcrever <arquivo> [--salvar]` — transcreve um arquivo de áudio
-- `/modelo` — lista os modelos do Ollama; `/modelo <nome>` troca o ativo
+- `/modelo` — lista os modelos do Ollama; `/modelo <nome>` troca o ativo (basta o começo do nome)
+- `/retomar` — lista as conversas anteriores; `/retomar <n>` continua uma delas
+- `/padroes` — mostra as preferências guardadas; `/padroes limpar` esquece tudo
 - `/limpar` — apaga a memória da conversa atual
 - `/sair`, `/exit`, `/quit` — encerra o Oráculo
+
+### Retomar uma conversa
+
+`/retomar` lista as últimas conversas numeradas e `/retomar 3` continua a terceira de onde
+ela parou. **A conversa inteira volta para a tela**, no mesmo formato de sempre, para você
+ler e rolar; abaixo dela uma régua marca onde a conversa antiga acaba e a nova começa. As
+mensagens voltam também para a memória do modelo (as últimas que couberem na janela de
+contexto — o Oráculo avisa quando o arquivo tem mais do que cabe), e os turnos novos são
+anexados ao **mesmo arquivo**, em vez de abrir um segundo registro pela metade.
+
+### Preferências lembradas
+
+O que você troca em conversa (`/modelo`, `/think`, `/stt`, `/vad`, `/voz` e o Ctrl+O) volta
+igual na próxima sessão, gravado em `~/.oraculo/prefs.json`. O `config.py` é o padrão de
+fábrica; o arquivo só ganha uma chave quando você troca aquilo em conversa, e aí ele vence.
+`/padroes` mostra o que está guardado e `/padroes limpar` devolve o comando ao `config.py`.
+
+**A escuta pela palavra "Oráculo" nunca é lembrada.** Manter o microfone aberto é escolha de
+cada sessão, nunca herdada de ontem por um arquivo; quem quiser a escuta ligada de fábrica
+muda `WAKE_ENABLED` no `config.py`, que é um ato deliberado e visível.
+
+### Limpeza do histórico
+
+No arranque, conversas com mais de `SESSIONS_MAX_AGE_DAYS` (90) são apagadas — mas as
+`SESSIONS_KEEP_MIN` (20) mais recentes ficam sempre, por mais antigas que sejam, para que
+voltar de uma temporada longe não encontre o histórico varrido. O que sai é anunciado na
+tela. `SESSIONS_MAX_AGE_DAYS = 0` desliga a limpeza.
 
 A conversa é desenhada numa calha: a pergunta aparece recuada, a resposta abre com
 `● Oráculo` e o corpo fica alinhado numa coluna, com um rodapé discreto trazendo o
@@ -143,9 +172,24 @@ Sem terminal interativo (pipe, redirecionamento) ou sem `prompt_toolkit`, o modo
 mostra o modelo, o modo (texto/voz), o estado do thinking e a ocupação da memória.
 
 - **↑/↓** navegam o histórico, que persiste entre sessões (`~/.oraculo/input_history`)
-- **`/`** abre o autocomplete dos comandos; **Tab** escolhe, **Enter** envia
+- **`/`** abre o autocomplete dos comandos, **já com a primeira opção destacada** — a seta
+  para baixo vai para a segunda, e **Enter** aceita a que está em foco
+- **Tab** completa sem enviar
 - **Alt+Enter** quebra linha sem enviar (mensagens de várias linhas)
-- **Ctrl+D** encerra; **Ctrl+C** interrompe
+- **Ctrl+D** encerra; **Ctrl+C** limpa a caixa, e um segundo Ctrl+C encerra
+
+Você não precisa digitar o comando inteiro: `/th` + Enter roda `/think`, e `/modelo qwen2`
+acha o `qwen2.5:7b`. Comandos que esperam argumento (`/modelo`, `/transcrever`, `/stt`,
+`/retomar`) abrem espaço e aguardam quando você **abrevia**; digitados por inteiro, o Enter
+executa direto — `/modelo` sozinho lista os modelos.
+
+Em `/transcrever`, **Enter numa pasta entra nela** e mostra o que há dentro, um nível de
+cada vez, em vez de exigir o caminho completo de cabeça. Enter num arquivo o escolhe e
+envia. Arquivo nunca é escolhido às cegas: o que vai ser aceito está destacado na tela.
+
+**Ctrl+C** ocioso limpa a caixa de entrada e arma a saída por `CTRL_C_EXIT_WINDOW` segundos
+(5); o segundo Ctrl+C dentro dessa janela encerra, e qualquer tecla cancela. Durante uma
+resposta ele continua cortando a geração, e durante a escuta encerra só a escuta.
 
 A caixa cresce até 8 linhas e depois rola. Para selecionar uma mensagem longa com o
 mouse, arraste contra a borda de cima ou de baixo: a caixa rola junto e a seleção

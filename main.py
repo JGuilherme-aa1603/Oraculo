@@ -7,6 +7,7 @@ Fase 2: entrada/saída de voz opcional (Whisper STT + Piper TTS), comandos e
 
 import contextlib
 import json
+import os
 import sys
 import threading
 import time
@@ -159,6 +160,8 @@ def _status(ctx: dict) -> dict:
     chain = ctx.get("chain")
     flags = ["voz" if ctx.get("voice_mode") else "texto"]
     flags.append("think on" if ctx.get("thinking") else "think off")
+    if config.LOCUTOR_ENABLED:
+        flags.append("só você")
     if chain is not None:
         # Memória em pares (pergunta+resposta), que é como a janela é cortada.
         with contextlib.suppress(Exception):
@@ -221,6 +224,8 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
         else:
             ui.recording(console, "gravando", "Enter para parar")
             path = audio.record_ptt(wait_stop=wait_stop)
+        if config.LOCUTOR_ENABLED and not _confere_dono(ctx, path):
+            return None
         ui.notice(console, "transcrevendo...")
         _stt_t0 = time.monotonic()
         text = stt.transcribe(path)
@@ -239,6 +244,39 @@ def _listen(ctx: dict, ask, wait_stop=None, ask_nowait=None,
         return None
 
     return text
+
+
+def _confere_dono(ctx: dict, path: str) -> bool:
+    """True se a fala pode seguir para a transcrição.
+
+    O portão fica aqui, depois da gravação e **antes** do STT, porque é o único
+    ponto por onde os três caminhos de captura passam — e porque fala de outra
+    pessoa não deve nem virar texto. O WAV é apagado na rejeição: reter no /tmp
+    a voz de quem não pediu nada seria guardar o que não é nosso.
+    """
+    from core import locutor
+
+    console = ctx["console"]
+    try:
+        resultado, score = locutor.verificar_arquivo(path)
+    except Exception as exc:  # noqa: BLE001
+        # Verificação quebrada não pode calar o Oráculo: avisa, desliga e deixa
+        # o turno passar. O contrário (rejeitar tudo em silêncio) é o modo de
+        # falha que ninguém consegue diagnosticar.
+        config.LOCUTOR_ENABLED = False
+        ui.warn(console, f"Verificação de voz desligada: {exc}")
+        return True
+
+    if resultado != locutor.ESTRANHO:
+        return True
+
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+    if config.LOCUTOR_AVISA:
+        ui.notice(console, f"não reconheci a voz — fala descartada "
+                           f"({score:.2f} de {locutor.perfil()[1]:.2f}); "
+                           f"/dono desliga a verificação")
+    return False
 
 
 def _gravar_com_vad(console) -> str | None:

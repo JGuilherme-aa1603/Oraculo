@@ -8,6 +8,8 @@ incrementais. Usa um modelo local via [Ollama](https://ollama.com) orquestrado p
 - **Fase 2 (Voz):** entrada/saída de voz opcional (Whisper STT + Kokoro TTS) com fala em
   streaming e barge-in, roteamento de comandos, transcrição de arquivos, telemetria
   opt-in e persistência de sessões. O modo texto continua padrão.
+- **Fase 3 (Sempre ouvindo):** parada automática por VAD, wake word "Oráculo" treinada na
+  sua voz e verificação de locutor — o Oráculo responde só a você.
 
 ## Requisitos
 
@@ -80,6 +82,7 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/voz` — alterna entre modo voz e modo texto
 - `/vad` — liga/desliga a parada automática da gravação (desligado = push-to-talk)
 - `/despertar` — liga/desliga a escuta pela palavra "Oráculo" (microfone sempre aberto)
+- `/dono` — liga/desliga responder só à sua voz (exige o perfil cadastrado)
 - `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
 - `/transcrever <arquivo> [--salvar]` — transcreve um arquivo de áudio
@@ -100,14 +103,16 @@ anexados ao **mesmo arquivo**, em vez de abrir um segundo registro pela metade.
 
 ### Preferências lembradas
 
-O que você troca em conversa (`/modelo`, `/think`, `/stt`, `/vad`, `/voz` e o Ctrl+O) volta
+O que você troca em conversa (`/modelo`, `/think`, `/stt`, `/vad`, `/voz`, `/dono` e o Ctrl+O) volta
 igual na próxima sessão, gravado em `~/.oraculo/prefs.json`. O `config.py` é o padrão de
 fábrica; o arquivo só ganha uma chave quando você troca aquilo em conversa, e aí ele vence.
 `/padroes` mostra o que está guardado e `/padroes limpar` devolve o comando ao `config.py`.
 
 **A escuta pela palavra "Oráculo" nunca é lembrada.** Manter o microfone aberto é escolha de
 cada sessão, nunca herdada de ontem por um arquivo; quem quiser a escuta ligada de fábrica
-muda `WAKE_ENABLED` no `config.py`, que é um ato deliberado e visível.
+muda `WAKE_ENABLED` no `config.py`, que é um ato deliberado e visível. O `/dono`, ao
+contrário, **é** lembrado: ele fecha um portão em vez de abrir o microfone, então herdá-lo
+ligado só restringe quem o Oráculo atende.
 
 ### Limpeza do histórico
 
@@ -280,6 +285,41 @@ têm timbre parecido demais, e sem amostras suas o modelo aprende "voz de robô"
 "a palavra". O treinador imprime a taxa de falso positivo por hora medida em áudio real
 que ele nunca viu, e escolhe o limiar a partir dela — se o número sair ruim, ele diz.
 
+**Responder só a você (verificação de voz):** com `/dono`, cada fala captada é comparada
+com o seu perfil de timbre antes de virar texto. Se não for a sua voz, o áudio é
+descartado ali mesmo — sem transcrição, sem resposta, e o WAV temporário é apagado. É o
+que impede uma televisão ligada, um vídeo ou uma visita de abrir um turno.
+
+Como funciona: o `voxceleb_resnet34_LM` do WeSpeaker (26 MB, ONNX no `onnxruntime` que já
+está aqui) transforma a fala num vetor de 256 números que descreve o timbre, e o cosseno
+com o seu perfil decide. Nada de texto e nada de conteúdo entram nessa conta.
+
+**Isto não é autenticação.** Um vetor de timbre é enganável por imitação e por uma
+gravação sua tocada num alto-falante. Ele resolve o problema real (a sala falando junto),
+não um adversário.
+
+Falas com menos de `LOCUTOR_MIN_SECONDS` (1 s) **passam sem julgamento**: em meio segundo
+o vetor ainda não se formou, e rejeitar por falta de evidência tornaria "sim", "não" e
+"para" inutilizáveis. Nesse caso quem filtrou a sala foi a wake word.
+
+Cadastre a sua voz uma vez — sem GPU e sem torch:
+
+```fish
+.venv/bin/python tools/cadastrar_voz.py --gravar 8   # 8 frases suas, ~4 s cada
+.venv/bin/python tools/cadastrar_voz.py              # mede o limiar e grava o perfil
+```
+
+O cadastro aproveita também os clipes de "Oráculo" que o treinador do wake word deixou em
+`~/.oraculo/voice/`. Para medir o limiar ele baixa fala de **outras pessoas** (português
+real, do Multilingual LibriSpeech), guarda só os vetores e descarta o áudio; o limiar sai
+no **meio da folga** entre a sua pior gravação e o negativo mais parecido, e o script
+recusa gravar o perfil se folga não houver. `--avaliar` mostra a tabela sem gravar nada,
+e `--esquecer` apaga o perfil.
+
+Medição nesta máquina (40 clipes seus, 1038 janelas de 10 locutores): você entre 0,58 e
+0,71, outras pessoas no máximo 0,41 — limiar 0,494, com 100% de aceitação sua e nenhum
+falso positivo. Enquanto a verificação está ligada, a barra de status mostra `só você`.
+
 Enquanto a resposta não começa, um indicador mostra **"Carregando modelo..."** se o
 Ollama ainda está subindo o modelo na VRAM (cold start) ou **"Pensando..."** quando
 ele já está carregado e gerando.
@@ -352,6 +392,7 @@ oraculo/
 │   ├── stt.py       # Whisper (faster-whisper) — áudio → texto
 │   ├── vad.py       # Detecção de atividade de voz (Silero) — sabe quando você parou
 │   ├── wake.py      # Palavra de despertar "Oráculo" (openWakeWord + cabeça própria)
+│   ├── locutor.py   # Verificação de voz: só responde ao dono (WeSpeaker)
 │   ├── transcript.py# Transcrição de arquivos: parágrafos, Markdown, gravação
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
@@ -364,7 +405,8 @@ oraculo/
 │   ├── tui.py       # Modo tela cheia: transcript rolável + caixa fixa no rodapé
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── tools/
-│   └── treinar_wake.py  # Treina a cabeça do wake word (roda uma vez, fora do app)
+│   ├── treinar_wake.py  # Treina a cabeça do wake word (roda uma vez, fora do app)
+│   └── cadastrar_voz.py # Cadastra a sua voz e mede o limiar (roda uma vez)
 ├── requirements.txt
 └── README.md
 ```
@@ -430,6 +472,6 @@ nova é exigida (apenas a biblioteca-padrão + `rich`).
 |------|-----------|--------|
 | 1 — MVP | Chat no terminal + memória + Ollama | ✅ Concluída |
 | 2 — Voz | Whisper (STT) + Piper (TTS) + comandos + persistência | ✅ Concluída |
-| 3 — Wake Word | VAD (Silero) ✅ · wake word "Oráculo" ✅ · verificação de voz | 🚧 Em andamento |
+| 3 — Wake Word | VAD (Silero) ✅ · wake word "Oráculo" ✅ · verificação de voz ✅ | ✅ Concluída |
 | 4 — RAG | Indexar notas do Obsidian (nomic-embed-text) | ⏳ Futuro |
 | 5 — Commands | Executar comandos do sistema com whitelist segura | ⏳ Futuro |

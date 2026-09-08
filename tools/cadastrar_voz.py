@@ -365,8 +365,14 @@ def main() -> int:
         print("\n  (--avaliar: nada foi gravado)")
         return 0
 
-    fonte = f"{len(pos_vetores)} gravações; {n_locutores} locutores de negativo"
-    locutor.gravar_perfil(pos_vetores, limiar, fonte)
+    # Conta só as frases do `--gravar`: são elas que descrevem a VOZ. Os clipes
+    # de "Oráculo" entram no perfil (descrevem o caso difícil da fala de 1 s),
+    # mas não contam como cadastro — um perfil só deles descreve uma palavra.
+    n_frases = len(sorted((config.LOCUTOR_DIR / "amostras").glob("*.wav"))) \
+        if (config.LOCUTOR_DIR / "amostras").exists() else 0
+    fonte = (f"{len(pos_vetores)} gravações ({n_frases} frases de cadastro); "
+             f"{n_locutores} locutores de negativo")
+    locutor.gravar_perfil(pos_vetores, limiar, fonte, frases=n_frases)
     print(f"\n  perfil gravado em {locutor.caminho_perfil()}")
     print("  Ligue com /dono dentro do Oráculo (ou LOCUTOR_ENABLED no config.py).")
     return 0

@@ -209,11 +209,18 @@ def caminho_perfil():
     return config.LOCUTOR_DIR / PERFIL
 
 
-def gravar_perfil(vetores, limiar: float, fonte: str = "") -> None:
+def gravar_perfil(vetores, limiar: float, fonte: str = "",
+                  frases: int = 0) -> None:
     """Grava o centróide do dono e o limiar medido para ele.
 
     Guarda os vetores individuais junto: um perfil novo pode ser recalculado
     (limiar novo, gravação nova) sem pedir todas as frases de volta.
+
+    `frases` é quantas gravações vieram do cadastro de VERDADE (`--gravar`), em
+    oposição aos clipes de 1 s de "Oráculo" que o treinador do wake word deixou.
+    A distinção não é estatística, é de significado: um perfil feito só dos
+    clipes descreve uma PALAVRA, não uma voz. Quem decide com base nisso é
+    `perfil_robusto()`, e é ele que sustenta o nível destrutivo da Fase 5.
     """
     import numpy as np
 
@@ -222,7 +229,8 @@ def gravar_perfil(vetores, limiar: float, fonte: str = "") -> None:
     centro = centro / np.linalg.norm(centro)
     config.LOCUTOR_DIR.mkdir(parents=True, exist_ok=True)
     np.savez(caminho_perfil(), centro=centro, vetores=vetores,
-             limiar=np.float32(limiar), fonte=np.array(fonte))
+             limiar=np.float32(limiar), fonte=np.array(fonte),
+             frases=np.int32(frases))
     global _perfil_cache
     _perfil_cache = None
 
@@ -243,6 +251,30 @@ def perfil():
     limiar = config.LOCUTOR_THRESHOLD or float(dados["limiar"])
     _perfil_cache = (dados["centro"], limiar)
     return _perfil_cache
+
+
+def perfil_robusto() -> bool:
+    """True se o perfil veio de cadastro REAL, não do provisório.
+
+    Um perfil sem a chave `frases` é, por construção, anterior a esta checagem —
+    e o único que existe assim é o provisório, montado com os clipes de
+    "Oráculo" do treinador do wake word. Tratá-lo como zero é o padrão seguro:
+    um arquivo antigo **não** destrava o nível destrutivo por omissão.
+
+    Isto é o que torna a regra estrutural em vez de um comentário: quem confere
+    é o arquivo, não a boa vontade de quem escreveu o código acima.
+    """
+    import numpy as np
+
+    alvo = caminho_perfil()
+    if not alvo.exists():
+        return False
+    try:
+        dados = np.load(alvo, allow_pickle=False)
+        frases = int(dados["frases"]) if "frases" in dados.files else 0
+    except (OSError, ValueError, KeyError):
+        return False
+    return frases >= config.ACOES_MIN_FRASES_PERFIL
 
 
 def disponivel() -> bool:

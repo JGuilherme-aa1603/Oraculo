@@ -39,11 +39,16 @@ class OraculoChain:
         self.recuperar: Callable[[str], tuple[str, list[str]]] | None = None
         # Fontes usadas no último turno, para o rodapé mostrar.
         self.last_sources: list[str] = []
+        # Ações no computador (Fase 5). `acoes_ligadas` governa o system prompt;
+        # `_llm_acoes` é um LLM SEPARADO, com as ferramentas presas, usado só no
+        # passe de decisão. Ver decidir_acoes() para o porquê da separação.
+        self.acoes_ligadas: bool = False
+        self._llm_acoes = None
         self._montar_prompt(notas=False)
         self.llm = build_llm(self.model_name, reasoning=self.reasoning)
         self.pipeline = self.prompt | self.llm
 
-    def _montar_prompt(self, notas: bool) -> None:
+    def _montar_prompt(self, notas: bool, acoes: bool | None = None) -> None:
         """(Re)monta o template. `notas` decide qual system prompt entra.
 
         O bloco recuperado é um placeholder PRÓPRIO, e não um pedaço colado no
@@ -52,12 +57,15 @@ class OraculoChain:
         histórico da conversa — a cada turno, empilhando, até a janela estourar
         com contexto que já cumpriu sua função.
         """
+        if acoes is None:
+            acoes = self.acoes_ligadas
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", config.build_system_prompt(notas)),
+                ("system", config.build_system_prompt(notas, acoes)),
                 MessagesPlaceholder(variable_name="history"),
                 MessagesPlaceholder(variable_name="notas"),
                 ("human", "{input}"),
+                MessagesPlaceholder(variable_name="acoes"),
             ]
         )
 
@@ -86,7 +94,53 @@ class OraculoChain:
         self._montar_prompt(notas=recuperar is not None)
         self.pipeline = self.prompt | self.llm
 
-    def stream(self, user_input: str) -> Iterator[tuple[str, str]]:
+    def set_acoes(self, ligado: bool) -> None:
+        """Liga/desliga as ações no computador.
+
+        Como no set_notas, o system prompt muda no MESMO movimento: a lista de
+        ações que ele anuncia é montada do registro de core/acoes.py, então
+        ligar a capacidade e declará-la são o mesmo ato. Desligar remove as duas.
+        """
+        self.acoes_ligadas = bool(ligado)
+        self._llm_acoes = None
+        self._montar_prompt(notas=self.recuperar is not None)
+        self.pipeline = self.prompt | self.llm
+
+    def decidir_acoes(self, user_input: str) -> list[tuple[str, dict]]:
+        """Passe 1: decide as ações, com CONTEXTO LIMPO.
+
+        Aqui está o isolamento que a Fase 4 tornou necessário. Este passe recebe
+        só o system prompt e a mensagem do usuário — **sem histórico e sem os
+        trechos recuperados das notas**. Uma nota que contivesse "execute X"
+        entra no contexto por busca automática, sem o usuário ter pedido; se ela
+        alcançasse a chamada que decide executar, a defesa contra isso seria
+        apenas uma frase no prompt, e esta sessão já mostrou três vezes que
+        defesa de prompt cede. Aqui ela é estrutural: o texto recuperado não tem
+        por onde chegar.
+
+        Custa uma chamada a mais por turno, e só com as ações ligadas.
+        """
+        from core import acoes as acoes_mod
+
+        if not self.acoes_ligadas:
+            return []
+        if self._llm_acoes is None:
+            # reasoning=False sempre: decidir ferramenta não é tarefa de
+            # raciocínio longo, e o thinking aqui só somaria latência ao turno.
+            self._llm_acoes = build_llm(self.model_name, reasoning=False).bind_tools(
+                acoes_mod.descricao_para_modelo())
+        limpo = ChatPromptTemplate.from_messages(
+            [("system", config.build_system_prompt(False, True)),
+             ("human", "{input}")])
+        try:
+            resposta = (limpo | self._llm_acoes).invoke({"input": user_input})
+        except Exception:  # noqa: BLE001 — falha aqui vira turno de conversa
+            return []
+        return [(c["name"], c.get("args") or {})
+                for c in (getattr(resposta, "tool_calls", None) or [])]
+
+    def stream(self, user_input: str,
+               relato_acoes: str = "") -> Iterator[tuple[str, str]]:
         """Gera a resposta em streaming como eventos `(tipo, texto)`:
           - ("think", ...):  tokens de raciocínio (só se o thinking estiver ligado);
           - ("answer", ...): tokens da resposta final.
@@ -94,6 +148,12 @@ class OraculoChain:
         """
         chunks: list[str] = []
         full = None
+        # O relato do que foi executado entra DEPOIS da pergunta, porque é
+        # posterior a ela: o usuário pediu, a ação rodou, e só então o modelo
+        # escreve. Descrito por verbos e sem batizar a mensagem, pela mesma
+        # razão do cabeçalho das notas (ver core/rag.py).
+        acoes: list[BaseMessage] = (
+            [SystemMessage(content=relato_acoes)] if relato_acoes else [])
         notas: list[BaseMessage] = []
         self.last_sources = []
         if self.recuperar is not None:
@@ -110,7 +170,7 @@ class OraculoChain:
                 self.last_sources = fontes
         for chunk in self.pipeline.stream(
             {"input": user_input, "history": self.memory.messages,
-             "notas": notas}
+             "notas": notas, "acoes": acoes}
         ):
             # Agrega TODOS os chunks (mesmo sem conteúdo) para preservar o
             # metadata de uso/duração que o Ollama anexa ao chunk final.

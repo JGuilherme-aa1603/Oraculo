@@ -19,6 +19,11 @@ escrever `RAG_ENABLED = True` sem o índice na mão poria o Oráculo anunciando 
 system prompt uma capacidade que ele não tem, que é justamente o que o
 invariante 1 proíbe.
 
+**O `/comandos` (Fase 5) também NÃO entra**, e pelo critério da wake word, não
+pelo do `/notas`. Ler as suas notas é passivo; executar ações mexe na máquina, e
+uma sessão que já nasce podendo desligar o computador é exatamente o padrão
+herdado que este projeto recusa. Ligar isso é um ato desta sessão, sempre.
+
 Duas regras que o desenho segue:
 
 - **Lista branca, com tipo.** Nada de despejar o `ctx` inteiro: só as chaves de

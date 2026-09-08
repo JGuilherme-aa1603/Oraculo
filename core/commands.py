@@ -36,6 +36,7 @@ COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
     ("/vad", "", "liga/desliga a parada automática da gravação"),
     ("/despertar", "", "liga/desliga a escuta pela palavra \"Oráculo\""),
     ("/dono", "", "liga/desliga responder só à sua voz"),
+    ("/comandos", "", "liga/desliga as ações no computador (não é lembrado)"),
     ("/notas", "", "liga/desliga a consulta às suas notas do Obsidian"),
     ("/indexar", "", "reindexa o vault para a consulta às notas"),
     ("/buscar", "<pergunta>", "mostra os trechos que a busca traria, sem o LLM"),
@@ -497,6 +498,41 @@ def _handle_dono(ctx: dict) -> None:
         ui.ok(console, "Verificação de voz desativada — respondo a qualquer voz.")
 
 
+def _handle_comandos(ctx: dict) -> None:
+    """Alterna as ações no computador.
+
+    Ao ligar, lista o que ele passa a poder fazer — a lista sai do registro, que
+    é a mesma fonte do system prompt. E diz o que está travado e por quê: um
+    recurso que existe mas não aparece é indistinguível de um que quebrou.
+
+    NÃO é gravado nas preferências, de propósito. Ver core/prefs.py.
+    """
+    from core import acoes as acoes_mod
+
+    console = ctx["console"]
+    if config.ACOES_ENABLED:
+        config.ACOES_ENABLED = False
+        ctx["chain"].set_acoes(False)
+        ui.ok(console, "Ações desativadas — voltei a só gerar texto.")
+        return
+
+    config.ACOES_ENABLED = True
+    ctx["chain"].set_acoes(True)
+    ui.ok(console, "Ações ativadas — posso mexer no computador.")
+    liberado, motivo = acoes_mod.pode_destrutiva(ctx)
+    for acao in acoes_mod.ACOES.values():
+        if acao.destrutiva and not liberado:
+            continue
+        args = ", ".join(acao.parametros) or "—"
+        console.print(f"    [{config.UI_COLOR_PROMPT}]{acao.nome}[/] "
+                      f"[{config.UI_COLOR_FAINT}]{args}[/]")
+    if not liberado:
+        ui.notice(console, f"  desligar/reiniciar indisponíveis: {motivo}")
+    else:
+        ui.notice(console, "  desligar/reiniciar pedem confirmação sempre")
+    ui.notice(console, "  vale só nesta sessão — /comandos não é lembrado")
+
+
 def _ligar_notas(ctx: dict) -> bool:
     """Carrega o índice e liga a consulta na chain. True se conseguiu."""
     from core import rag
@@ -866,6 +902,10 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/dono":
         _handle_dono(ctx)
+        return True
+
+    if cmd in {"/comandos", "/acoes", "/ações"}:
+        _handle_comandos(ctx)
         return True
 
     if cmd == "/notas":

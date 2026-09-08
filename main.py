@@ -164,6 +164,11 @@ def _status(ctx: dict) -> dict:
         flags.append("só você")
     if config.RAG_ENABLED:
         flags.append("notas")
+    # Agir na máquina precisa ficar VISÍVEL o tempo todo, pela mesma razão do
+    # microfone aberto: é o estado em que uma frase mal interpretada deixa de
+    # ser um texto ruim e passa a ser uma coisa que aconteceu.
+    if config.ACOES_ENABLED:
+        flags.append("ações")
     if chain is not None:
         # Memória em pares (pergunta+resposta), que é como a janela é cortada.
         with contextlib.suppress(Exception):
@@ -266,9 +271,14 @@ def _confere_dono(ctx: dict, path: str) -> bool:
         # o turno passar. O contrário (rejeitar tudo em silêncio) é o modo de
         # falha que ninguém consegue diagnosticar.
         config.LOCUTOR_ENABLED = False
+        ctx["voz_do_dono"] = False
         ui.warn(console, f"Verificação de voz desligada: {exc}")
         return True
 
+    # O nível destrutivo da Fase 5 exige DONO, nunca CURTO: uma fala de meio
+    # segundo passa o filtro de sala por falta de evidência, e "sim" é
+    # exatamente o tipo de fala curta que alguém usaria para confirmar.
+    ctx["voz_do_dono"] = resultado == locutor.DONO
     if resultado != locutor.ESTRANHO:
         return True
 
@@ -279,6 +289,64 @@ def _confere_dono(ctx: dict, path: str) -> bool:
                            f"({score:.2f} de {locutor.perfil()[1]:.2f}); "
                            f"/dono desliga a verificação")
     return False
+
+
+def _executar_acoes(ctx: dict, user_input: str, confirmar) -> str:
+    """Passe 1 + execução. Devolve o relato que o passe 2 vai usar.
+
+    A ordem — decidir, validar, autorizar, executar, mostrar — não é arbitrária:
+    cada etapa pode barrar a seguinte, e nenhuma delas confia na anterior. O
+    relato devolvido é o que o modelo vai ler para contar o que aconteceu; ele
+    descreve fatos já consumados, nunca instruções.
+    """
+    from core import acoes as acoes_mod
+
+    console = ctx["console"]
+    chain = ctx["chain"]
+    pedidos = chain.decidir_acoes(user_input)
+    if not pedidos:
+        return ""
+
+    relatos: list[str] = []
+    for nome, argumentos in pedidos:
+        try:
+            limpos = acoes_mod.validar(nome, argumentos)
+        except acoes_mod.AcaoErro as exc:
+            ui.warn(console, f"ação recusada: {exc}")
+            relatos.append(f"A ação {nome} foi RECUSADA na validação: {exc}. "
+                           f"Nada foi executado.")
+            continue
+
+        acao = acoes_mod.ACOES[nome]
+        if acao.destrutiva:
+            liberado, motivo = acoes_mod.pode_destrutiva(ctx)
+            if not liberado:
+                ui.warn(console, f"{nome} bloqueado: {motivo}")
+                relatos.append(f"A ação {nome} foi BLOQUEADA: {motivo}. "
+                               f"Nada foi executado.")
+                continue
+            # A voz filtrou a sala; a confirmação é que autoriza, e ela exige
+            # alguém no teclado. Ver o cabeçalho de core/acoes.py.
+            if not confirmar(f"{acao.descricao} Confirma?"):
+                ui.notice(console, f"{nome} cancelado")
+                relatos.append(f"O usuário NÃO confirmou {nome}. "
+                               f"Nada foi executado.")
+                continue
+
+        try:
+            resultado = acoes_mod.despachar(nome, limpos)
+        except acoes_mod.AcaoErro as exc:
+            ui.error(console, f"{nome} falhou: {exc}")
+            relatos.append(f"A ação {nome} FALHOU: {exc}.")
+            continue
+        ui.action(console, nome, limpos, resultado)
+        relatos.append(f"A ação {nome} foi executada com sucesso: {resultado}.")
+
+    if not relatos:
+        return ""
+    return ("Enquanto o usuário esperava, o sistema executou o que ele pediu. "
+            "Resultado, para você contar em uma frase (não repita esta lista, "
+            "não invente nada além dela):\n- " + "\n- ".join(relatos))
 
 
 def _gravar_com_vad(console) -> str | None:
@@ -591,6 +659,22 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
     gancho de repaint faz o trabalho na thread certa (core/tui.py).
     """
     console = ctx["console"]
+
+    def confirmar(pergunta: str) -> bool:
+        """Confirmação de ação irreversível. O padrão é NÃO.
+
+        Usa o mesmo `ask` do modo, então ela sempre vem do teclado — inclusive
+        no modo voz, e é de propósito: um "sim" falado pode vir da sala, e é
+        curto demais para a verificação de voz julgar. Qualquer coisa que não
+        seja um sim explícito cancela; silêncio, Ctrl+C e Ctrl+D cancelam.
+        """
+        ui.warn(console, f"{pergunta}  (digite 'sim' para confirmar)")
+        try:
+            resposta = ask()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return (resposta or "").strip().lower() in {"sim", "s", "confirmo"}
+
     history = history_mod.SessionHistory()
     # O /retomar troca o arquivo em que esta sessão escreve, então ele precisa
     # do objeto — e não de uma cópia do caminho, que ficaria desatualizada.
@@ -632,6 +716,16 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
         tick_title()
         # No modo voz, a fala é sintetizada frase a frase JÁ DURANTE a geração,
         # sobreposta à escrita — não espera a resposta inteira terminar.
+        # As ações rodam ANTES da resposta: o usuário pediu, o sistema fez, e
+        # só então o modelo conta o que aconteceu. O contrário — responder
+        # "pronto!" e agir depois — deixaria a fala anterior ao fato.
+        relato_acoes = ""
+        if config.ACOES_ENABLED:
+            try:
+                relato_acoes = _executar_acoes(ctx, user_input, confirmar)
+            except Exception as exc:  # noqa: BLE001
+                ui.error(console, f"Erro nas ações: {exc}")
+
         speaker = speaker_mod.StreamSpeaker() if ctx["voice_mode"] else None
         # Telemetria do turno: t0 começa aqui (pós-STT) — o STT entra como estágio
         # próprio. Marcações e métricas são best-effort e não alteram o turno.
@@ -659,7 +753,8 @@ def _chat_loop(chain: OraculoChain, ctx: dict, *, ask, live_factory, echo: bool,
                     lambda: _alterna_raciocinio(ctx)):
                 status = _ThinkingStatus(live, chain.model_name, ctx.get("thinking", False))
                 status.start()
-                for kind, text in chain.stream(user_input):
+                for kind, text in chain.stream(user_input,
+                                               relato_acoes=relato_acoes):
                     # No modo tela cheia o Ctrl+C não sobe como exceção nesta
                     # thread: ele marca o Event, e a checagem é aqui.
                     if interrupt is not None and interrupt.is_set():

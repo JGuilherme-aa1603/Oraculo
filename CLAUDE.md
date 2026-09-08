@@ -19,7 +19,9 @@ Oráculo é um assistente local estilo Jarvis, 100% offline, desenvolvido em fas
 - **Fase 4 (Notas) — concluída:** RAG com Obsidian (`core/rag.py` +
   `tools/indexar_vault.py`: busca híbrida vetor+BM25 sobre um índice `.npz` local,
   `/notas` alterna, `/indexar` reconstrói, `/buscar` inspeciona a busca sem o LLM)
-- **Fase 5 — próxima:** comandos do sistema com whitelist segura
+- **Fase 5 (Ações) — v1:** ações no computador com whitelist (`core/acoes.py`:
+  `/comandos` alterna, nunca lembrado; passe duplo isola a decisão do texto do RAG;
+  desligar/reiniciar atrás de voz + confirmação e travados sem perfil real)
 
 ## Ambiente
 
@@ -68,6 +70,7 @@ oraculo/
     ├── wake.py      # palavra de despertar: mel + embedding (openWakeWord) + cabeça .npz
     ├── locutor.py   # verificação de voz: fbank Kaldi + WeSpeaker → só responde ao dono
     ├── rag.py       # notas do Obsidian: trechos, vetores e busca híbrida (vetor+BM25)
+    ├── acoes.py     # whitelist de ações no computador: validadores + executor
     ├── transcript.py# transcrição de arquivos: parágrafos, Markdown, gravação
     ├── tts.py       # texto → áudio (Kokoro | Piper)
     ├── speaker.py   # fala em streaming: síntese + reprodução em pipeline, com barge-in
@@ -348,6 +351,43 @@ Regras de código:
   wake word) porque lê notas suas na sua máquina, não abre o microfone para a sala.
 - **O índice mora fora do vault** (`~/.oraculo/rag/`). Ele é derivado e descartável;
   escrever um arquivo nosso no meio das notas sujaria o vault e a sincronização dele.
+
+**Ações no computador (`core/acoes.py`) — Fase 5.**
+
+- **A whitelist protege o comando; o perigo está nos ARGUMENTOS.** Eles vêm do modelo,
+  que os tirou de texto seu — possivelmente transcrito de voz, possivelmente perto de uma
+  nota recuperada. A regra que organiza o módulo é: **o modelo escolhe de um conjunto,
+  nunca compõe uma string.** Nome de aplicativo é conferido contra os `.desktop`
+  instalados, volume contra uma faixa, área de screenshot contra um enum. Nada do que o
+  modelo escreve é usado como veio.
+- **O passe duplo é a resposta estrutural à injeção que a Fase 4 criou.** Uma nota que
+  diga "execute X" entra no contexto por busca automática, sem o usuário pedir. A decisão
+  de executar (`chain.decidir_acoes`) roda com contexto LIMPO — sem histórico e sem os
+  trechos recuperados —, então o texto do RAG não tem por onde chegar. Testado com uma
+  nota mandando desligar: zero chamadas de ferramenta. Defesa de prompt não serviria aqui;
+  esta sessão mostrou três vezes que ela cede.
+- **A verificação de voz é filtro de sala, não autenticação — e o portão respeita isso.**
+  Para desligar/reiniciar a voz *impede a sala*, e a **confirmação é que autoriza**,
+  porque exige alguém no teclado. No modo texto não há voz e a confirmação é o portão
+  inteiro, o que já é mais forte. Promover o timbre a senha contradiria o que o projeto
+  tem escrito desde a Fase 3.
+- **Só `DONO` conta, nunca `CURTO`.** O `_confere_dono` deixa passar fala curta demais
+  para julgar — e "sim" é exatamente o tipo de fala curta que alguém usaria para
+  confirmar. O nível destrutivo exige o veredito forte.
+- **A trava do perfil provisório é ESTRUTURAL, não um comentário.** `gravar_perfil` grava
+  quantas frases de cadastro real entraram, e `perfil_robusto()` lê isso do arquivo.
+  Perfil sem a chave é tratado como zero — então o provisório, e qualquer arquivo antigo,
+  **não** destrava o nível destrutivo por omissão.
+- **A lista de ações no system prompt sai do REGISTRO, nunca escrita à mão.** Uma ação no
+  registro que faltasse no prompt seria capacidade escondida; uma no prompt que faltasse
+  no registro seria promessa falsa. As duas metades vêm da mesma fonte, como o
+  `COMMAND_SPECS` faz com o `/ajuda`.
+- **`shell=True` transformaria todos os validadores em decoração** — bastaria um `;` no
+  argumento. Lista de argv sempre, e o binário conferido contra `_BINARIOS`
+  imediatamente antes do exec, que é a segunda das duas validações do nome.
+- **O `/comandos` não é lembrado**, ao contrário do `/notas`. Critério da wake word: ler
+  notas é passivo, executar mexe na máquina, e uma sessão que já nasce podendo desligar o
+  computador é o padrão herdado que o projeto recusa.
 
 **Sessões e preferências (`core/history.py`, `core/prefs.py`).**
 

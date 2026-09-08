@@ -10,6 +10,9 @@ incrementais. Usa um modelo local via [Ollama](https://ollama.com) orquestrado p
   opt-in e persistência de sessões. O modo texto continua padrão.
 - **Fase 3 (Sempre ouvindo):** parada automática por VAD, wake word "Oráculo" treinada na
   sua voz e verificação de locutor — o Oráculo responde só a você.
+- **Fase 5 (Ações):** executa um conjunto fechado de ações no computador (abrir app,
+  volume, screenshot, bloquear tela, notificar), com desligar/reiniciar atrás de
+  verificação de voz e confirmação. Desligado por padrão e nunca herdado entre sessões.
 - **Fase 4 (Notas):** consulta ao seu vault do Obsidian antes de responder — busca
   híbrida (vetor + termos) sobre um índice local, com as notas consultadas visíveis
   no rodapé de cada turno.
@@ -86,6 +89,7 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/vad` — liga/desliga a parada automática da gravação (desligado = push-to-talk)
 - `/despertar` — liga/desliga a escuta pela palavra "Oráculo" (microfone sempre aberto)
 - `/dono` — liga/desliga responder só à sua voz (exige o perfil cadastrado)
+- `/comandos` — liga/desliga as ações no computador (vale só nesta sessão)
 - `/notas` — liga/desliga a consulta às suas notas do Obsidian
 - `/indexar` — (re)indexa o vault
 - `/buscar <pergunta>` — mostra os trechos que a busca traria, sem gastar o LLM
@@ -453,6 +457,7 @@ oraculo/
 │   ├── wake.py      # Palavra de despertar "Oráculo" (openWakeWord + cabeça própria)
 │   ├── locutor.py   # Verificação de voz: só responde ao dono (WeSpeaker)
 │   ├── rag.py       # Notas do Obsidian: trechos, vetores e busca híbrida
+│   ├── acoes.py     # Whitelist de ações no computador: validadores + executor
 │   ├── transcript.py# Transcrição de arquivos: parágrafos, Markdown, gravação
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
@@ -535,4 +540,4 @@ nova é exigida (apenas a biblioteca-padrão + `rich`).
 | 2 — Voz | Whisper (STT) + Piper (TTS) + comandos + persistência | ✅ Concluída |
 | 3 — Wake Word | VAD (Silero) ✅ · wake word "Oráculo" ✅ · verificação de voz ✅ | ✅ Concluída |
 | 4 — RAG | Notas do Obsidian: busca híbrida sobre índice local ✅ | ✅ Concluída |
-| 5 — Commands | Executar comandos do sistema com whitelist segura | ⏳ Futuro |
+| 5 — Ações | Ações no computador com whitelist, passe duplo e portão de confirmação | 🔨 v1 |

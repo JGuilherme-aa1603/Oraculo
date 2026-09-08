@@ -270,6 +270,24 @@ def sources(console: Console, fontes: list[str]) -> None:
     console.print(line)
 
 
+def action(console: Console, nome: str, argumentos: dict, resultado: str) -> None:
+    """Eco de uma ação executada no computador.
+
+    Mesma regra do rodapé de fontes das notas, com a aposta mais alta: agir em
+    silêncio é indistinguível de não agir, e aqui o "não agir" pode ser um
+    desligamento que você acha que cancelou. Mostra o nome, os argumentos JÁ
+    VALIDADOS (não o que o modelo pediu) e o que aconteceu.
+    """
+    args = " ".join(f"{k}={v}" for k, v in argumentos.items())
+    line = Text(" " * config.UI_GUTTER)
+    line.append(f"{config.UI_GLYPH_NOTICE}  ", style=config.UI_COLOR_ACCENT)
+    line.append(nome, style=f"bold {config.UI_COLOR_ACCENT}")
+    if args:
+        line.append(f" {args}", style=config.UI_COLOR_DIM)
+    line.append(f"  ->  {resultado}", style=config.UI_COLOR_SOFT)
+    console.print(line)
+
+
 def notice(console: Console, text: str, *, style: str | None = None) -> None:
     """Mensagem subordinada ao turno (gravando, transcrevendo, fala interrompida).
     Usa o glifo de continuação para não competir com o cabeçalho do turno.

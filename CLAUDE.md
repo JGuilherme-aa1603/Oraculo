@@ -198,6 +198,18 @@ Regras de código:
 
 **Verificação de voz (`core/locutor.py`, `tools/cadastrar_voz.py`) — o que custou tempo.**
 
+- **PENDENTE: refazer o perfil com frases de verdade.** O perfil que está no disco foi
+  montado só com os 40 clipes de 1 s de "Oráculo" que sobraram do treinador do wake word —
+  ele descreve uma palavra mais do que uma voz. Falta rodar, na máquina do usuário:
+
+      .venv/bin/python tools/cadastrar_voz.py --gravar 8
+      .venv/bin/python tools/cadastrar_voz.py
+
+  E depois o teste que realmente vale, pela regra do próprio projeto: deixar `/dono` ligado
+  com um vídeo em português tocando na sala e conferir que nada passa. O corpus de negativos
+  do cadastro tem só 10 locutores; áudio de sala é o melhor teste de falso positivo que
+  existe aqui.
+
 - **O que erra em silêncio aqui são as FEATURES, não o modelo.** A rede espera fbank de 80
   bandas no dialeto do Kaldi, e cada convenção conta: janela hamming simétrica, DC fora
   **antes** da pré-ênfase, pré-ênfase repetindo a primeira amostra (não zero), triângulos

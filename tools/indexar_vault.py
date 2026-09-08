@@ -36,9 +36,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config                                    # noqa: E402
 from core import rag                             # noqa: E402
 
-# Perguntas de fora do domínio: assuntos que um vault pessoal de notas técnicas
-# em português não responde. O melhor score de cada uma é um falso positivo
-# medido — é o que diz onde o piso precisa ficar.
+def carregar_perguntas(origem: Path) -> tuple[list[str], list[str]]:
+    """Lê o arquivo de calibração em duas listas: (positivas, negativas).
+
+    As seções são marcadas por `[positivas]` e `[negativas]`. Sem marcador
+    nenhum, tudo conta como positiva — é o formato antigo, e quebrar arquivos
+    que já existem para introduzir uma seção seria trocar um incômodo por uma
+    calibração silenciosamente errada.
+    """
+    positivas: list[str] = []
+    negativas: list[str] = []
+    atual = positivas
+    for linha in origem.read_text(encoding="utf-8").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#"):
+            continue
+        marcador = linha.lower().strip("[]") if linha.startswith("[") else ""
+        if marcador in {"positivas", "negativas"}:
+            atual = positivas if marcador == "positivas" else negativas
+            continue
+        atual.append(linha)
+    return positivas, negativas
+
+
+# Negativos embutidos: usados só quando o arquivo do usuário não traz seção
+# própria. O melhor score de cada um é um falso positivo medido — é o que diz
+# onde o piso precisa ficar.
 FORA_DO_DOMINIO = (
     "qual a receita de bacalhau à Brás",
     "quem ganhou a Copa do Mundo de 1994",
@@ -155,30 +178,50 @@ def calibrar(caminho_perguntas: str | None) -> int:
         achados = indice.buscar(pergunta, k=1, minimo=-1.0)
         return (achados[0].score, achados[0].trecho.fonte) if achados else (0.0, "-")
 
-    negativos = [(*melhor(p), p) for p in FORA_DO_DOMINIO]
+    origem = Path(caminho_perguntas) if caminho_perguntas else config.RAG_PERGUNTAS_FILE
+    perguntas: list[str] = []
+    fora: list[str] = list(FORA_DO_DOMINIO)
+    de_onde = "embutidos no script"
+    if origem.exists():
+        perguntas, do_arquivo = carregar_perguntas(origem)
+        if do_arquivo:
+            fora, de_onde = do_arquivo, origem.name
+
+    # Rótulo repetido é a falha que envenena os dois lados de uma vez: a mesma
+    # pergunta contando como positiva e negativa torna a folga insolúvel e o
+    # relatório, mentira. Foi o erro de "oráculos de Delfos" no wake word.
+    repetidas = set(map(str.lower, perguntas)) & set(map(str.lower, fora))
+    if repetidas:
+        print(f"Erro em {origem}: {len(repetidas)} pergunta(s) nas DUAS seções.")
+        for p in sorted(repetidas):
+            print(f"    \"{p}\"")
+        print("Decida de que lado ela fica — o vault responde, ou não responde.")
+        return 1
+
+    negativos = [(*melhor(p), p) for p in fora]
     neg = np.array([s for s, _, _ in negativos])
-    print(f"Negativos: {len(negativos)} perguntas fora do domínio")
+    print(f"Negativos: {len(negativos)} perguntas fora do domínio ({de_onde})")
     print(f"  min {neg.min():.3f}   mediana {np.median(neg):.3f}   "
           f"MAX {neg.max():.3f}")
     for score, fonte, pergunta in sorted(negativos, reverse=True)[:3]:
         print(f"    {score:.3f}  \"{pergunta}\" → {fonte[:52]}")
+    if len(negativos) < 25:
+        # Medido neste projeto: com 10 negativos a folga dava +0,008 e zero
+        # falso positivo; com 30 ela virou negativa. O aviso existe para o
+        # próximo não repetir a conclusão otimista que essa amostra produz.
+        print(f"  AVISO: {len(negativos)} negativos é pouco para enxergar a "
+              f"cauda.\n  A folga que sair daqui será otimista — acrescente "
+              f"perguntas fora do domínio.")
 
-    origem = Path(caminho_perguntas) if caminho_perguntas else config.RAG_PERGUNTAS_FILE
-    if not origem.exists():
-        print(f"\nSem o lado positivo: {origem} não existe.")
-        print("Escreva nesse arquivo uma pergunta por linha — perguntas de "
-              "verdade,\ndo jeito que você as digitaria, sobre coisas que as "
-              "suas notas respondem.\nSem elas não dá para saber onde o piso "
-              "pode ficar sem cortar o que importa.")
+    if not perguntas:
+        falta = "não existe" if not origem.exists() else "não tem perguntas positivas"
+        print(f"\nSem o lado positivo: {origem} {falta}.")
+        print("Escreva nele, sob [positivas], uma pergunta por linha — do jeito "
+              "que você\nas digitaria, sobre coisas que as suas notas respondem. "
+              "Sem elas não dá\npara saber onde o piso pode ficar sem cortar o "
+              "que importa.")
         print(f"\nCom o que dá para medir agora: o limiar precisa ficar ACIMA "
               f"de {neg.max():.3f}.")
-        return 1
-
-    perguntas = [linha.strip() for linha in
-                 origem.read_text(encoding="utf-8").splitlines()
-                 if linha.strip() and not linha.startswith("#")]
-    if not perguntas:
-        print(f"\n{origem} está vazio.")
         return 1
 
     positivos = [(*melhor(p), p) for p in perguntas]

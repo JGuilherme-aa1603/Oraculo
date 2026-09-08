@@ -395,10 +395,12 @@ ignorou", que a resposta sozinha não distingue.
 .venv/bin/python tools/indexar_vault.py --calibrar
 ```
 
-A calibração compara perguntas que o vault responde — as **suas**, em
-`~/.oraculo/rag/perguntas.txt` — com perguntas fora do domínio. E o comando se recusa a
-inventar o lado positivo sozinho, porque uma frase copiada da nota mede a facilidade, não
-a busca.
+A calibração lê `~/.oraculo/rag/perguntas.txt`, que tem duas seções: `[positivas]` são
+perguntas que o seu vault responde — só você pode escrevê-las, e o comando se recusa a
+inventá-las, porque uma frase copiada da nota mede a facilidade e não a busca — e
+`[negativas]` são perguntas fora do domínio, cujo maior score é o falso positivo medido.
+Acrescente às negativas sempre que uma pergunta fora do assunto arrastar alguma nota; com
+menos de 25 delas o comando avisa que a folga vai sair otimista.
 
 Não espere separação limpa: medido com 30 perguntas fora do domínio, umas 10% delas
 arrastam um trecho irrelevante. Isso é aceito de propósito — o limiar pende para o lado

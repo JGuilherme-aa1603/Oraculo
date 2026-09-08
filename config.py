@@ -302,11 +302,16 @@ LOCUTOR_DIR = DATA_DIR / "locutor"
 # notas sujaria o vault e a sincronização com um arquivo que não é seu.
 RAG_DIR = DATA_DIR / "rag"
 RAG_INDEX_FILE = RAG_DIR / "indice.npz"
-# Perguntas de VERDADE, suas, uma por linha — o lado positivo da calibração do
-# limiar (`tools/indexar_vault.py --calibrar`). Fica fora do repositório porque
-# depende do que existe no seu vault, e o comando se recusa a inventar um
-# número sem ele: positivo fabricado dá medida otimista, foi o erro tanto dos
-# negativos sintéticos da verificação de voz quanto da primeira calibração aqui.
+# O conjunto de calibração do limiar (`tools/indexar_vault.py --calibrar`), em
+# duas seções: `[positivas]` são perguntas de VERDADE que o seu vault responde,
+# `[negativas]` são perguntas que ele não responde. Fica fora do repositório
+# porque depende do que existe no seu vault.
+#
+# O comando se recusa a dar um número sem as positivas — positivo fabricado dá
+# medida otimista, foi o erro tanto dos negativos sintéticos da verificação de
+# voz quanto da primeira calibração aqui. E avisa quando há menos de 25
+# negativas, porque foi exatamente com 10 que a folga apareceu positiva e
+# sumiu ao chegar a 30.
 RAG_PERGUNTAS_FILE = RAG_DIR / "perguntas.txt"
 RECENT_SESSIONS_ON_SPLASH = 3
 

@@ -16,8 +16,10 @@ Oráculo é um assistente local estilo Jarvis, 100% offline, desenvolvido em fas
   `/despertar` alterna) e verificação de voz (`core/locutor.py` +
   `tools/cadastrar_voz.py`: fala que não é do dono é descartada antes do STT, `/dono`
   alterna)
-- **Fase 4 — próxima:** RAG com Obsidian
-- **Fase futura:** comandos do sistema com whitelist segura (5)
+- **Fase 4 (Notas) — concluída:** RAG com Obsidian (`core/rag.py` +
+  `tools/indexar_vault.py`: busca híbrida vetor+BM25 sobre um índice `.npz` local,
+  `/notas` alterna, `/indexar` reconstrói, `/buscar` inspeciona a busca sem o LLM)
+- **Fase 5 — próxima:** comandos do sistema com whitelist segura
 
 ## Ambiente
 
@@ -65,6 +67,7 @@ oraculo/
     ├── vad.py       # detecção de atividade de voz (Silero v6, streaming frame a frame)
     ├── wake.py      # palavra de despertar: mel + embedding (openWakeWord) + cabeça .npz
     ├── locutor.py   # verificação de voz: fbank Kaldi + WeSpeaker → só responde ao dono
+    ├── rag.py       # notas do Obsidian: trechos, vetores e busca híbrida (vetor+BM25)
     ├── transcript.py# transcrição de arquivos: parágrafos, Markdown, gravação
     ├── tts.py       # texto → áudio (Kokoro | Piper)
     ├── speaker.py   # fala em streaming: síntese + reprodução em pipeline, com barge-in
@@ -250,6 +253,70 @@ Regras de código:
   enganável por imitação e por uma gravação sua num alto-falante. Ele resolve a sala falando
   junto — prometer mais seria a mesma desonestidade que o system prompt evita.
 
+**Notas do Obsidian (`core/rag.py`, `tools/indexar_vault.py`) — o que custou tempo.**
+
+- **Nenhuma dependência nova, de novo.** 258 notas dão ~1.300 trechos; a 768 dimensões
+  isso é 3 MB de float32 e a busca é um produto matriz-vetor de 14 ms no numpy que já
+  está aqui. Chroma/FAISS/LanceDB resolveriam o mesmo trazendo um banco e um formato
+  próprio. Os embeddings saem do `/api/embed` do Ollama que já está de pé, por `urllib`.
+  Mesma regra do VAD e do wake word: **procure dentro do que já existe.**
+- **O prefixo de tarefa do nomic erra em SILÊNCIO.** O `nomic-embed-text` foi treinado
+  com `search_document: ` nos documentos e `search_query: ` nas perguntas; sem eles nada
+  falha, a relevância só piora — e a caçada vai parar no chunking ou no limiar, que não
+  são a causa. Por isso o índice **grava** o modelo e o prefixo que usou e se recusa a
+  carregar se o config divergir.
+- **O cosseno sozinho não separa neste vault, e isso é medida, não impressão.** A
+  pergunta "por que o VAD não roda no callback do PortAudio" trazia o trecho certo com
+  0,708 e um trecho sobre um modal de app, sem relação nenhuma, com 0,693. O embedding
+  entende o assunto e achata o resto; quem sabe que "PortAudio" é uma palavra rara e
+  decisiva é a estatística de termos. Daí o BM25 fundido por RRF — **com peso pequeno
+  (0.3)**: a 0.5 ele já sequestrava "o que é o Bora-Pará", empurrando notas que só
+  repetem "Pará" por cima da nota do projeto.
+- **Ordenar e barrar são papéis DIFERENTES.** O RRF ordena; o portão é o cosseno. O score
+  do RRF não serviria de limiar porque é relativo ao ranking — uma pergunta sobre a
+  Batalha de Stalingrado também tem um "melhor colocado" com RRF perfeitamente saudável.
+  Efeito colateral na tela: os scores do `/buscar` sobem e descem pela lista, o que
+  **parece** bug de ordenação. A saída diz isso explicitamente, senão alguém conserta o
+  que não está quebrado.
+- **A primeira calibração mediu a coisa errada e quase fixou um limiar que rejeitava o
+  caso de uso principal.** Ela montava os positivos sozinha: sorteava trechos e usava uma
+  frase do corpo como consulta. Mediana 0,808, lindo — e mentira, porque frase copiada da
+  nota é quase uma duplicata dela e não se parece com pergunta de gente. O limiar que saiu
+  dali (0,71) rejeitava a pergunta do VAD, que pontua 0,708. É a mesma armadilha do
+  "separe por clipe, não por janela": **positivo fácil demais mede a facilidade, não o
+  sistema.** Hoje os positivos vêm de `~/.oraculo/rag/perguntas.txt`, escrito por quem
+  usa, e sem o arquivo o comando se recusa a inventar um número.
+- **Confirme que a pergunta tem resposta no vault antes de culpar o limiar.** "Qual o
+  limiar da verificação de voz" pontuava 0,653 e parecia limiar apertado demais. O vault
+  não tem essa nota — fala da verificação de voz só como "passo 3c" futuro. A busca
+  acertou ao não achar; o rótulo é que estava errado, exatamente como "oráculos de
+  Delfos" na lista de negativos do wake word.
+- **A folga aqui é de oito milésimos, e o limiar pende para o lado PERMISSIVO.** É o
+  inverso do wake word, e a razão é a assimetria de custo: lá um falso positivo abria o
+  microfone e fazia o Oráculo falar sozinho; aqui um trecho irrelevante só ocupa espaço
+  num bloco que o prompt manda ignorar quando não vier ao caso, enquanto o falso negativo
+  desliga o recurso inteiro em silêncio. Erre para o lado que o modelo consegue corrigir.
+- **Bloco prometido e não entregue vira invenção.** Com o system prompt anunciando que os
+  trechos chegam num bloco NOTAS, um turno sem bloco nenhum deixa uma promessa em aberto —
+  e o gemma4 a cumpriu sozinho: escreveu do nada um "NOTAS: **Projeto Voz:** o limiar de
+  verificação de voz ideal deve ser ajustado..." e serviu a invenção como se fosse a nota
+  do usuário. **A confabulação exata que o invariante 1 existe para impedir, criada pelo
+  próprio desenho do prompt.** O conserto é `rag.CONTEXTO_VAZIO`: quando a busca não acha
+  nada, vai um bloco dizendo que não achou. Ausência tem que ser um fato explícito, nunca
+  um espaço em branco. Pelo mesmo motivo o prompt proíbe reproduzir o bloco na resposta —
+  o modelo estava ecoando o rótulo `NOTAS:` como se fosse o começo da fala dele.
+- **O bloco recuperado é um placeholder próprio, não um pedaço colado no `{input}`.**
+  Colar as notas na pergunta guardaria quatro trechos do vault dentro da memória da
+  conversa, a cada turno, empilhando até a janela estourar com contexto que já cumpriu sua
+  função. O que entra na memória é a pergunta que o usuário fez.
+- **O `/notas` é lembrado, mas só liga se o índice REALMENTE abrir.** Preferência é
+  desejo, não garantia: o vault pode ter sumido. Ligar assim mesmo poria o system prompt
+  anunciando que o Oráculo lê as suas notas enquanto ele não lê nenhuma — o invariante 1
+  quebrado pelo caminho mais silencioso possível. Ele entra nas prefs (ao contrário da
+  wake word) porque lê notas suas na sua máquina, não abre o microfone para a sala.
+- **O índice mora fora do vault** (`~/.oraculo/rag/`). Ele é derivado e descartável;
+  escrever um arquivo nosso no meio das notas sujaria o vault e a sincronização dele.
+
 **Sessões e preferências (`core/history.py`, `core/prefs.py`).**
 
 - **`/retomar` redesenha a conversa inteira no transcript**, pela mesma calha de um turno ao
@@ -322,7 +389,8 @@ Regras de código:
 
 ## Invariantes que NÃO devem regredir
 
-1. **System prompt honesto.** O prompt em `config.py` declara explicitamente o que o Oráculo NÃO consegue fazer (executar ações, acessar arquivos/agenda/internet, persistir dados). O modelo nunca deve fingir que executou uma ação. Não enfraquecer isso ao expandir. Ao ganhar uma capacidade nova de verdade (RAG na Fase 4, comandos na Fase 5), **atualizar o prompt junto** — a lista de limitações tem que continuar verdadeira nos dois sentidos.
+1. **System prompt honesto.** O prompt em `config.py` declara explicitamente o que o Oráculo NÃO consegue fazer (executar ações, acessar agenda/internet, persistir dados). O modelo nunca deve fingir que executou uma ação. Não enfraquecer isso ao expandir. Ao ganhar uma capacidade nova de verdade (comandos na Fase 5), **atualizar o prompt junto** — a lista de limitações tem que continuar verdadeira nos dois sentidos.
+   A partir da Fase 4 o prompt é **montado**, não escrito duas vezes: `build_system_prompt(notas)` troca o parágrafo das capacidades e o das limitações conforme o `/notas`, e `OraculoChain.set_notas` chama os dois no mesmo movimento. Duas cópias do prompt inteiro divergiriam na primeira edição, e a metade desatualizada é justamente a que ninguém relê. Capacidade nova entra assim: um parágrafo com duas versões, nunca um prompt paralelo.
 2. **Offline-first.** Nada de chamadas de rede externas, APIs pagas ou telemetria enviada para fora. A telemetria da Fase 2 é 100% local (`~/.oraculo/telemetry/*.jsonl`), opt-in e desligada por padrão. Downloads de modelo (Hugging Face) só na primeira execução, nunca no caminho da conversa.
 3. **Voz é opcional.** A partir da Fase 2, o modo texto continua sendo o padrão. Voz é alternável e não pode quebrar o fluxo de texto. Faltando lib de voz, o `/voz` avisa o que falta e volta ao texto.
 4. **Cada fase não quebra a anterior.**

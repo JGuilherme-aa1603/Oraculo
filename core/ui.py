@@ -250,6 +250,26 @@ def turn_footer(console: Console, metrics: str | None) -> None:
     console.print(Text(" " * config.UI_GUTTER + metrics, style=config.UI_COLOR_FAINT))
 
 
+def sources(console: Console, fontes: list[str]) -> None:
+    """Notas que entraram no contexto deste turno.
+
+    Recuperar em silêncio é indistinguível de não recuperar nada — a mesma
+    razão pela qual a faxina de sessões anuncia o que apagou e pela qual a
+    verificação de voz avisa quando descarta uma fala. Sem esta linha, "o
+    Oráculo respondeu errado" e "o Oráculo respondeu sem consultar as notas"
+    parecem exatamente a mesma coisa na tela.
+    """
+    if not fontes:
+        return
+    line = Text(" " * config.UI_GUTTER)
+    line.append("notas: ", style=config.UI_COLOR_FAINT)
+    for i, fonte in enumerate(fontes):
+        if i:
+            line.append(" · ", style=config.UI_COLOR_FAINT)
+        line.append(fonte, style=config.UI_COLOR_DIM)
+    console.print(line)
+
+
 def notice(console: Console, text: str, *, style: str | None = None) -> None:
     """Mensagem subordinada ao turno (gravando, transcrevendo, fala interrompida).
     Usa o glifo de continuação para não competir com o cabeçalho do turno.

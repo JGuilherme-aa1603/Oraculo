@@ -36,6 +36,9 @@ COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
     ("/vad", "", "liga/desliga a parada automática da gravação"),
     ("/despertar", "", "liga/desliga a escuta pela palavra \"Oráculo\""),
     ("/dono", "", "liga/desliga responder só à sua voz"),
+    ("/notas", "", "liga/desliga a consulta às suas notas do Obsidian"),
+    ("/indexar", "", "reindexa o vault para a consulta às notas"),
+    ("/buscar", "<pergunta>", "mostra os trechos que a busca traria, sem o LLM"),
     ("/think", "", "liga/desliga o raciocínio; Ctrl+O mostra o texto"),
     ("/stt", "<motor>", "lista ou troca o motor de transcrição"),
     ("/transcrever", "<arquivo>", "transcreve um áudio; --salvar grava um .md ao lado"),
@@ -494,6 +497,157 @@ def _handle_dono(ctx: dict) -> None:
         ui.ok(console, "Verificação de voz desativada — respondo a qualquer voz.")
 
 
+def _ligar_notas(ctx: dict) -> bool:
+    """Carrega o índice e liga a consulta na chain. True se conseguiu."""
+    from core import rag
+
+    console = ctx["console"]
+    try:
+        consulta = rag.Consulta.abrir()
+    except rag.RagError as exc:
+        ui.warn(console, f"Notas indisponíveis: {exc}")
+        return False
+    ctx["chain"].set_notas(consulta)
+    ctx["rag"] = consulta
+    config.RAG_ENABLED = True
+    return True
+
+
+def _handle_notas(ctx: dict) -> None:
+    """Alterna a consulta às notas do Obsidian.
+
+    Ligar troca o system prompt junto (ver OraculoChain.set_notas): o Oráculo
+    só anuncia que lê as suas notas enquanto realmente lê.
+    """
+    console = ctx["console"]
+    if config.RAG_ENABLED:
+        ctx["chain"].set_notas(None)
+        ctx.pop("rag", None)
+        config.RAG_ENABLED = False
+        prefs_mod.gravar(notas=False)
+        ui.ok(console, "Consulta às notas desativada.")
+        return
+
+    if not _ligar_notas(ctx):
+        ui.hint(console, "  Indexe primeiro com [%s]/indexar[/]." %
+                config.UI_COLOR_PROMPT)
+        return
+
+    prefs_mod.gravar(notas=True)
+    consulta = ctx["rag"]
+    meta = consulta.indice.meta
+    ui.ok(console, f"Consulta às notas ativada — {meta['trechos']} trechos de "
+                   f"{meta['notas']} notas.")
+    ui.notice(console, f"  Vault: {meta['vault']}")
+    if consulta.indice.desatualizado():
+        ui.warn(console, "  O vault mudou desde a indexação — rode /indexar.")
+
+
+def _handle_indexar(ctx: dict) -> None:
+    """(Re)constrói o índice das notas, com barra de progresso.
+
+    O trabalho pesado é o embedding de ~1300 trechos, e ele acontece no Ollama;
+    aqui é só I/O e espera. Ao terminar, o índice em uso é substituído na hora —
+    reindexar e continuar consultando o índice velho seria o tipo de estado
+    desencontrado que ninguém percebe.
+    """
+    from core import rag
+
+    console = ctx["console"]
+    try:
+        raiz = rag.vault_dir()
+    except rag.RagError as exc:
+        ui.error(console, str(exc))
+        return
+
+    notas = rag.listar_notas(raiz)
+    ui.notice(console, f"Indexando {len(notas)} notas de {raiz}...")
+    inicio = time.monotonic()
+    try:
+        with console.status(f"[{config.UI_COLOR_ACCENT}]lendo as notas...",
+                            spinner=ui.IRIS) as status:
+            def progresso(feito: int, total: int) -> None:
+                status.update(f"[{config.UI_COLOR_ACCENT}]embutindo "
+                              f"{feito}/{total} trechos...")
+
+            indice = rag.construir(raiz, progresso=progresso)
+        caminho = indice.gravar()
+    except rag.RagError as exc:
+        ui.error(console, f"Falhou: {exc}")
+        return
+    except KeyboardInterrupt:
+        # Interromper aqui não deixa índice pela metade: o arquivo só é escrito
+        # depois que todos os vetores existem.
+        ui.warn(console, "Indexação interrompida — o índice anterior continua valendo.")
+        return
+
+    ui.ok(console, f"{indice.meta['notas']} notas em "
+                   f"{indice.meta['trechos']} trechos "
+                   f"({time.monotonic() - inicio:.1f}s).")
+    ui.notice(console, f"  {caminho} · "
+                       f"{caminho.stat().st_size / 1024:.0f} KB")
+    if config.RAG_ENABLED:
+        ctx["chain"].set_notas(rag.Consulta(indice))
+        ctx["rag"] = ctx["chain"].recuperar
+    else:
+        ui.hint(console, "  Ligue com [%s]/notas[/]." % config.UI_COLOR_PROMPT)
+
+
+def _handle_buscar(arg: str, ctx: dict) -> None:
+    """Mostra o que a busca traria, sem gastar o LLM.
+
+    É o instrumento antes da dedução, o mesmo papel do `--testar-microfone` do
+    wake word: quando a resposta com notas sai ruim, os dois suspeitos são
+    "veio o trecho errado" e "veio o certo e o modelo ignorou", e a resposta
+    sozinha não distingue. Aqui aparece exatamente o que iria para o contexto —
+    e, marcado com um x, o que o limiar barrou e por qual score.
+    """
+    from core import rag
+
+    console = ctx["console"]
+    if not arg:
+        ui.warn(console, "Uso: /buscar <pergunta>")
+        return
+
+    consulta = ctx.get("rag")
+    if consulta is None:
+        try:
+            consulta = rag.Consulta.abrir()
+        except rag.RagError as exc:
+            ui.warn(console, f"Notas indisponíveis: {exc}")
+            return
+
+    inicio = time.monotonic()
+    achados = consulta.indice.buscar(arg, k=max(config.RAG_TOP_K, 6), minimo=-1.0)
+    ms = (time.monotonic() - inicio) * 1000
+    ui.heading(console, f"Busca nas notas  ({ms:.0f} ms, "
+                        f"limiar {config.RAG_MIN_SCORE})")
+    if not achados:
+        ui.notice(console, "  nada no índice.")
+        return
+    for posicao, achado in enumerate(achados, 1):
+        passou = achado.score >= config.RAG_MIN_SCORE
+        marca = " " if passou else "x"
+        cor = config.UI_COLOR_ACCENT if passou else config.UI_COLOR_FAINT
+        fonte = achado.trecho.fonte
+        if len(fonte) > 64:
+            fonte = fonte[:61] + "..."
+        console.print(f"    [{config.UI_COLOR_ALERT}]{marca}[/] "
+                      f"[{config.UI_COLOR_FAINT}]{posicao}.[/] "
+                      f"[{cor}]{achado.score:.3f}[/]  "
+                      f"[{config.UI_COLOR_SOFT}]{fonte}[/]")
+        console.print(f"          [{config.UI_COLOR_FAINT}]"
+                      f"{achado.trecho.caminho}[/]")
+    barrados = sum(1 for a in achados if a.score < config.RAG_MIN_SCORE)
+    if barrados:
+        ui.notice(console, f"  {barrados} barrado(s) pelo limiar (x).")
+    # Sem esta linha o resultado parece um bug de ordenação: a ordem é a da
+    # fusão vetor+termos e o número é só o cosseno, então ele SOBE e DESCE pela
+    # lista. Ver o porquê dos dois papéis em core/rag.py (Indice.buscar).
+    ui.notice(console, "  ordem: busca híbrida · número: cosseno, que é o que "
+                       "o limiar corta")
+
+
 def _stt_detalhes() -> dict[str, str]:
     """Uma linha por motor, lida da configuração de verdade.
 
@@ -712,6 +866,18 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/dono":
         _handle_dono(ctx)
+        return True
+
+    if cmd == "/notas":
+        _handle_notas(ctx)
+        return True
+
+    if cmd == "/indexar":
+        _handle_indexar(ctx)
+        return True
+
+    if cmd == "/buscar":
+        _handle_buscar(arg, ctx)
         return True
 
     if cmd == "/think":

@@ -10,6 +10,9 @@ incrementais. Usa um modelo local via [Ollama](https://ollama.com) orquestrado p
   opt-in e persistência de sessões. O modo texto continua padrão.
 - **Fase 3 (Sempre ouvindo):** parada automática por VAD, wake word "Oráculo" treinada na
   sua voz e verificação de locutor — o Oráculo responde só a você.
+- **Fase 4 (Notas):** consulta ao seu vault do Obsidian antes de responder — busca
+  híbrida (vetor + termos) sobre um índice local, com as notas consultadas visíveis
+  no rodapé de cada turno.
 
 ## Requisitos
 
@@ -83,6 +86,9 @@ Ou ative o venv primeiro (`source .venv/bin/activate.fish` no Fish) e rode
 - `/vad` — liga/desliga a parada automática da gravação (desligado = push-to-talk)
 - `/despertar` — liga/desliga a escuta pela palavra "Oráculo" (microfone sempre aberto)
 - `/dono` — liga/desliga responder só à sua voz (exige o perfil cadastrado)
+- `/notas` — liga/desliga a consulta às suas notas do Obsidian
+- `/indexar` — (re)indexa o vault
+- `/buscar <pergunta>` — mostra os trechos que a busca traria, sem gastar o LLM
 - `/think` — liga/desliga o raciocínio (thinking) do modelo
 - `/stt` — lista os motores de transcrição; `/stt <motor>` troca (`whisper`/`parakeet`)
 - `/transcrever <arquivo> [--salvar]` — transcreve um arquivo de áudio
@@ -354,6 +360,53 @@ adiciona latência). Quando ligado, o indicador mostra **"Pensando..."** apenas 
 há raciocínio real acontecendo; pressione **Ctrl+O** durante a resposta para mostrar/ocultar
 o texto do raciocínio ao vivo. Modelos sem suporte são detectados e o `/think` avisa.
 
+### Consultar as suas notas do Obsidian (Fase 4)
+
+Com `/notas`, cada pergunta passa antes por uma busca no seu vault e os trechos mais
+relevantes chegam ao modelo junto com a pergunta. As notas que entraram aparecem no
+rodapé do turno — sem isso, "respondeu errado" e "respondeu sem consultar" seriam
+indistinguíveis na tela.
+
+Aponte `RAG_VAULT` para o seu vault no `config.py` e indexe uma vez:
+
+```bash
+.venv/bin/python tools/indexar_vault.py            # ~11s para 258 notas
+```
+
+Depois é só ligar com `/notas` dentro da conversa; a escolha é lembrada. Quando você
+escrever notas novas, `/indexar` refaz o índice (o comando avisa sozinho quando o vault
+mudou desde a última vez).
+
+**Como a busca funciona.** O vetor (`nomic-embed-text`, no mesmo Ollama) encontra o
+assunto; um BM25 sobre os mesmos trechos encontra o *termo*. Os dois rankings são
+fundidos, e é essa metade léxica que resolve nomes próprios e jargão — "PortAudio",
+"Kokoro", "VAD" — que o embedding dilui. O índice mora em `~/.oraculo/rag/indice.npz`,
+fora do vault: ele é derivado, e escrever um arquivo nosso no meio das suas notas
+sujaria o vault e a sincronização.
+
+**Quando a resposta sair errada, use `/buscar`.** Ele mostra exatamente o que teria ido
+para o contexto, sem gastar o LLM — e marca com `x` o que o limiar barrou, com o score.
+É o que distingue "a busca trouxe o trecho errado" de "trouxe o certo e o modelo
+ignorou", que a resposta sozinha não distingue.
+
+**Sobre o limiar.** `RAG_MIN_SCORE` é medido, não chutado:
+
+```bash
+.venv/bin/python tools/indexar_vault.py --calibrar
+```
+
+A calibração compara perguntas que o vault responde — as **suas**, em
+`~/.oraculo/rag/perguntas.txt` — com perguntas fora do domínio. Neste vault a folga é de
+oito milésimos (0,668 contra 0,676), então o número é frágil por natureza: vale
+acrescentar perguntas ao arquivo e remedir depois de escrever notas novas. E o comando
+se recusa a inventar o lado positivo sozinho, porque uma frase copiada da nota mede a
+facilidade, não a busca.
+
+**O system prompt muda junto com a capacidade.** Com `/notas` ligado o Oráculo declara
+que lê as suas notas indexadas; desligado, ele volta a declarar que não acessa arquivo
+nenhum. As duas metades precisam ser verdadeiras ao mesmo tempo, então elas mudam
+juntas — e ele nunca lê nada além dos trechos que a busca trouxe.
+
 ### Comando global
 
 O wrapper `bin/oraculo` roda o projeto de qualquer diretório usando o venv, sem
@@ -393,6 +446,7 @@ oraculo/
 │   ├── vad.py       # Detecção de atividade de voz (Silero) — sabe quando você parou
 │   ├── wake.py      # Palavra de despertar "Oráculo" (openWakeWord + cabeça própria)
 │   ├── locutor.py   # Verificação de voz: só responde ao dono (WeSpeaker)
+│   ├── rag.py       # Notas do Obsidian: trechos, vetores e busca híbrida
 │   ├── transcript.py# Transcrição de arquivos: parágrafos, Markdown, gravação
 │   ├── tts.py       # Kokoro/Piper — texto → áudio
 │   ├── text.py      # Limpeza de texto (remove Markdown p/ voz, filtra CJK)
@@ -406,7 +460,8 @@ oraculo/
 │   └── splash.py    # Splash screen de duas colunas (rich)
 ├── tools/
 │   ├── treinar_wake.py  # Treina a cabeça do wake word (roda uma vez, fora do app)
-│   └── cadastrar_voz.py # Cadastra a sua voz e mede o limiar (roda uma vez)
+│   ├── cadastrar_voz.py # Cadastra a sua voz e mede o limiar (roda uma vez)
+│   └── indexar_vault.py # Indexa o vault, inspeciona a busca e mede o limiar
 ├── requirements.txt
 └── README.md
 ```
@@ -473,5 +528,5 @@ nova é exigida (apenas a biblioteca-padrão + `rich`).
 | 1 — MVP | Chat no terminal + memória + Ollama | ✅ Concluída |
 | 2 — Voz | Whisper (STT) + Piper (TTS) + comandos + persistência | ✅ Concluída |
 | 3 — Wake Word | VAD (Silero) ✅ · wake word "Oráculo" ✅ · verificação de voz ✅ | ✅ Concluída |
-| 4 — RAG | Indexar notas do Obsidian (nomic-embed-text) | ⏳ Futuro |
+| 4 — RAG | Notas do Obsidian: busca híbrida sobre índice local ✅ | ✅ Concluída |
 | 5 — Commands | Executar comandos do sistema com whitelist segura | ⏳ Futuro |

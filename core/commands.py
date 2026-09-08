@@ -35,6 +35,7 @@ COMMAND_SPECS: tuple[tuple[str, str, str], ...] = (
     ("/voz", "", "alterna entre modo voz e modo texto"),
     ("/vad", "", "liga/desliga a parada automática da gravação"),
     ("/despertar", "", "liga/desliga a escuta pela palavra \"Oráculo\""),
+    ("/dono", "", "liga/desliga responder só à sua voz"),
     ("/think", "", "liga/desliga o raciocínio; Ctrl+O mostra o texto"),
     ("/stt", "<motor>", "lista ou troca o motor de transcrição"),
     ("/transcrever", "<arquivo>", "transcreve um áudio; --salvar grava um .md ao lado"),
@@ -459,6 +460,40 @@ def _handle_despertar(ctx: dict) -> None:
                        "pedir.")
 
 
+def _handle_dono(ctx: dict) -> None:
+    """Alterna a verificação de voz.
+
+    Ao ligar, diz o que ela é e o que ela não é: um filtro de sala, não uma
+    autenticação. Prometer mais do que um vetor de timbre entrega seria a mesma
+    desonestidade que o system prompt evita.
+    """
+    console = ctx["console"]
+    quer = not config.LOCUTOR_ENABLED
+
+    if quer:
+        from core import locutor
+
+        if not locutor.disponivel():
+            ui.warn(console, "Verificação de voz indisponível.")
+            for linha in locutor.motivo_indisponivel().splitlines():
+                if linha.strip():
+                    ui.warn(console, f"  {linha.strip()}")
+            return
+
+    config.LOCUTOR_ENABLED = quer
+    prefs_mod.gravar(dono=quer)
+    if quer:
+        ui.ok(console, "Verificação de voz ativada — só respondo à sua voz.")
+        ui.notice(console,
+                  "  Fala de outra pessoa é descartada sem transcrever. Frases "
+                  "muito curtas passam: não dá para julgar timbre em meio "
+                  "segundo.")
+        if not ctx.get("voice_mode"):
+            ui.notice(console, "  Só vale no modo voz — use /voz para entrar.")
+    else:
+        ui.ok(console, "Verificação de voz desativada — respondo a qualquer voz.")
+
+
 def _stt_detalhes() -> dict[str, str]:
     """Uma linha por motor, lida da configuração de verdade.
 
@@ -673,6 +708,10 @@ def handle(raw: str, ctx: dict) -> bool:
 
     if cmd == "/despertar":
         _handle_despertar(ctx)
+        return True
+
+    if cmd == "/dono":
+        _handle_dono(ctx)
         return True
 
     if cmd == "/think":

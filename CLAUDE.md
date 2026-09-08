@@ -10,11 +10,14 @@ Oráculo é um assistente local estilo Jarvis, 100% offline, desenvolvido em fas
 - **Fase 2 (Voz) — concluída:** STT (Whisper/Parakeet) + TTS (Kokoro/Piper) com fala em
   streaming, roteamento de comandos, persistência de sessões, telemetria opt-in,
   thinking com toggle ao vivo, barge-in por Esc, `/transcrever` e o wrapper `bin/oraculo`
-- **Fase 3 — atual:** VAD concluído (`core/vad.py`: a gravação para sozinha quando você
-  para de falar, `/vad` alterna) e wake word concluída (`core/wake.py` + `tools/treinar_wake.py`:
-  o microfone fica aberto e só "Oráculo" abre um turno, `/despertar` alterna). Falta a
-  verificação de voz (só responder ao dono)
-- **Fases futuras:** RAG com Obsidian (4), comandos do sistema com whitelist segura (5)
+- **Fase 3 (Sempre ouvindo) — concluída:** VAD (`core/vad.py`: a gravação para sozinha
+  quando você para de falar, `/vad` alterna), wake word (`core/wake.py` +
+  `tools/treinar_wake.py`: o microfone fica aberto e só "Oráculo" abre um turno,
+  `/despertar` alterna) e verificação de voz (`core/locutor.py` +
+  `tools/cadastrar_voz.py`: fala que não é do dono é descartada antes do STT, `/dono`
+  alterna)
+- **Fase 4 — próxima:** RAG com Obsidian
+- **Fase futura:** comandos do sistema com whitelist segura (5)
 
 ## Ambiente
 
@@ -61,6 +64,7 @@ oraculo/
     ├── stt.py       # áudio → texto (faster-whisper na GPU | parakeet na CPU)
     ├── vad.py       # detecção de atividade de voz (Silero v6, streaming frame a frame)
     ├── wake.py      # palavra de despertar: mel + embedding (openWakeWord) + cabeça .npz
+    ├── locutor.py   # verificação de voz: fbank Kaldi + WeSpeaker → só responde ao dono
     ├── transcript.py# transcrição de arquivos: parágrafos, Markdown, gravação
     ├── tts.py       # texto → áudio (Kokoro | Piper)
     ├── speaker.py   # fala em streaming: síntese + reprodução em pipeline, com barge-in
@@ -191,6 +195,60 @@ Regras de código:
 - **Áudio de sala é o melhor teste de falso positivo que existe aqui.** 90 s de vídeo
   falando em português, com o detector escutando, sem um disparo — vale mais que qualquer
   negativo sintetizado.
+
+**Verificação de voz (`core/locutor.py`, `tools/cadastrar_voz.py`) — o que custou tempo.**
+
+- **PENDENTE: refazer o perfil com frases de verdade.** O perfil que está no disco foi
+  montado só com os 40 clipes de 1 s de "Oráculo" que sobraram do treinador do wake word —
+  ele descreve uma palavra mais do que uma voz. Falta rodar, na máquina do usuário:
+
+      .venv/bin/python tools/cadastrar_voz.py --gravar 8
+      .venv/bin/python tools/cadastrar_voz.py
+
+  E depois o teste que realmente vale, pela regra do próprio projeto: deixar `/dono` ligado
+  com um vídeo em português tocando na sala e conferir que nada passa. O corpus de negativos
+  do cadastro tem só 10 locutores; áudio de sala é o melhor teste de falso positivo que
+  existe aqui.
+
+- **O que erra em silêncio aqui são as FEATURES, não o modelo.** A rede espera fbank de 80
+  bandas no dialeto do Kaldi, e cada convenção conta: janela hamming simétrica, DC fora
+  **antes** da pré-ênfase, pré-ênfase repetindo a primeira amostra (não zero), triângulos
+  desenhados em mel, coluna de Nyquist zerada. Errar qualquer uma não levanta exceção — só
+  encolhe a separação, e o sintoma chega disfarçado de "o limiar não acha um ponto bom".
+  Confira a cadeia contra vozes conhecidas **antes** de medir limiar: o dono contra ele
+  mesmo tem que dar alto, o mesmo clipe a 30% do volume tem que dar ~1,000 (é a CMN
+  funcionando), e ruído branco tem que ficar longe do perfil. Foi o que provou a
+  implementação em minutos, do mesmo jeito que o "hey jarvis" oficial provou a do wake word.
+- **Negativo sintético mente, e mente para o lado otimista.** A primeira medição usou vozes
+  de TTS como "outras pessoas" e deu uma folga enorme; só que duas vozes sintéticas
+  *diferentes* chegam a 0,61 de similaridade entre si — mais do que muita gente de verdade.
+  Sintético mede a distância do robô até você, que não é a pergunta. Com locutores reais
+  (Multilingual LibriSpeech em português, servido linha a linha pelo datasets-server do HF)
+  a conta fechou em 0,41 no pior negativo contra 0,58 na pior gravação do dono.
+- **A avaliação do positivo precisa ser leave-one-out.** Medir um clipe contra um centróide
+  que o contém é a mesma armadilha do "separe por clipe, não por janela" do wake word, só
+  que na avaliação: o número sai otimista de graça.
+- **O limiar fica no MEIO da folga**, não no extremo. "O maior limiar com zero falso
+  positivo" foi o erro do wake word e teria dado 0,55+ aqui; o meio-termo (0,494) aceita
+  100% do dono e nenhum dos 1038 negativos. Sem folga nenhuma o cadastro **recusa** gravar
+  o perfil em vez de entregar um número bonito.
+- **Fala curta demais PASSA, de propósito.** Abaixo de `LOCUTOR_MIN_SECONDS` o vetor de
+  timbre ainda não se formou (8 dos 40 clipes de "Oráculo" caem aí). Rejeitar por falta de
+  evidência tornaria "sim", "não" e "para" inutilizáveis; quem filtrou a sala nesse caso foi
+  a wake word.
+- **O portão fica antes do STT e apaga o WAV ao rejeitar.** É o único ponto por onde os três
+  caminhos de captura passam, fala de outra pessoa não deve nem virar texto, e reter no
+  `/tmp` a voz de quem não pediu nada seria guardar o que não é nosso. Pelo mesmo motivo o
+  cadastro guarda só os *vetores* dos negativos e descarta o áudio de terceiros.
+- **Verificação quebrada não pode calar o Oráculo.** Erro na conferência avisa, desliga a
+  verificação e deixa o turno passar. O contrário — rejeitar tudo em silêncio — é o modo de
+  falha que ninguém consegue diagnosticar.
+- **O `/dono` é lembrado nas preferências; a wake word não.** Não é inconsistência: ele
+  *fecha* um portão em vez de abrir o microfone, então herdá-lo ligado só restringe quem o
+  Oráculo atende. Ver a nota no topo de `core/prefs.py`.
+- **Isto não é autenticação, e a UI não pode sugerir que seja.** Um vetor de timbre é
+  enganável por imitação e por uma gravação sua num alto-falante. Ele resolve a sala falando
+  junto — prometer mais seria a mesma desonestidade que o system prompt evita.
 
 **Sessões e preferências (`core/history.py`, `core/prefs.py`).**
 

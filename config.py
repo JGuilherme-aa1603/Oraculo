@@ -127,6 +127,26 @@ WAKE_MAX_TOKENS = 3             # só procura o nome nos N primeiros tokens da f
 WAKE_FUZZY = 0.82               # similaridade mínima ("oraculo" vs "oráculo")
 # WAKE_DIR fica na seção de persistência, junto com DATA_DIR (definido lá).
 
+# --- Verificação de voz (Fase 3) ---
+# "Só responde ao dono": a fala captada é comparada com o perfil de timbre
+# gravado por tools/cadastrar_voz.py e descartada se não for você. Ver
+# core/locutor.py — e note que isto NÃO é autenticação, é um filtro de sala.
+#
+# DESLIGADO por padrão pelo mesmo motivo da wake word: sem perfil cadastrado ele
+# não tem o que comparar, e nada é carregado enquanto False (invariante 5).
+LOCUTOR_ENABLED = False
+# Fala mais curta que isto não é julgada — passa como CURTO. Medido, não
+# chutado: abaixo de ~1 s o vetor de timbre ainda não se formou e a similaridade
+# do próprio dono desaba, o que rejeitaria "sim" e "para".
+LOCUTOR_MIN_SECONDS = 1.0
+# 0.0 → usa o limiar que o cadastro mediu e gravou no perfil (recomendado).
+# Um valor aqui sobrepõe, para apertar ou afrouxar sem recadastrar.
+LOCUTOR_THRESHOLD = 0.0
+# Avisa na tela quando descarta uma fala por não ser sua. Descartar em silêncio
+# é indistinguível de microfone quebrado — o mesmo motivo do aviso da faxina.
+LOCUTOR_AVISA = True
+# LOCUTOR_DIR fica na seção de persistência, junto com DATA_DIR.
+
 # --- Transcrição de arquivos (/transcrever) ---
 # Extensões reconhecidas como áudio/vídeo. Serve só para avisar quando o caminho
 # não parece mídia — o whisper decodifica via PyAV e aceita bem mais formatos.
@@ -171,6 +191,8 @@ WAKE_DIR = DATA_DIR / "wake"
 # Gravações do dono dizendo o nome. Nascem no treinador do wake word e são a
 # semente da verificação de voz (passo 3c).
 VOICE_DIR = DATA_DIR / "voice"
+# Modelo de timbre do WeSpeaker + o perfil do dono (ver core/locutor.py).
+LOCUTOR_DIR = DATA_DIR / "locutor"
 RECENT_SESSIONS_ON_SPLASH = 3
 
 # Limpeza das sessões antigas, feita no arranque. Conversa guardada é dado do

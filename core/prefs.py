@@ -45,6 +45,7 @@ _CAMPOS: dict[str, type] = {
     "stt": str,
     "tts": str,
     "vad": bool,
+    "dono": bool,
 }
 
 # Preferências que apenas espelham um flag do config. As outras (modelo, think,
@@ -53,6 +54,10 @@ _ESPELHA_CONFIG = {
     "stt": "STT_ENGINE",
     "tts": "TTS_ENGINE",
     "vad": "VAD_ENABLED",
+    # A verificação de voz entra aqui, ao contrário da wake word, porque ela
+    # FECHA um portão em vez de abrir o microfone: herdá-la ligada só restringe
+    # quem o Oráculo atende, nunca amplia o que ele escuta.
+    "dono": "LOCUTOR_ENABLED",
 }
 
 
